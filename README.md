@@ -319,7 +319,7 @@ see Data sources & timing.)
 
 ## Data sources & timing
 - **Weather**: Open-Meteo `https://api.open-meteo.com/v1/forecast`,
-  lat 40.7517 / lon -73.9707 (ZIP 10017, NYC). Used for temperature, feels-like,
+  your site's lat/lon (set in `src/local_config.h`; gitignored). Used for temperature, feels-like,
   humidity, today's high/low, the hourly rain forecast (next-rain scan) and day/night.
   Params:
   `current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,is_day,rain`

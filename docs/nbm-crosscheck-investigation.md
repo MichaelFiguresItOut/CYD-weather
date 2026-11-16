@@ -1,6 +1,6 @@
 # Adding NBM (`ncep_nbm_conus`) as a second precipitation source — investigation report
 
-Date: 2026-11-13 · Location: 40.7517, −73.9707 (ZIP 10017) · Provider: Open-Meteo `/v1/forecast`
+Date: 2026-11-13 · Location: project site (coordinates in `src/local_config.h`) · Provider: Open-Meteo `/v1/forecast`
 Scope: investigation only — **no firmware files were modified**.
 
 ## TL;DR / recommendation
@@ -150,7 +150,7 @@ Additional findings:
 1. **Leave `fetchWeather()` and its URL untouched** (`src/main.cpp` ~line 600). Best-match keeps
    serving native RRFS 15-min + hourly rain exactly as today.
 2. Add a small helper, e.g. `bool fetchNbmHourly(JsonDocument& nbmDoc)`:
-   - GET `https://api.open-meteo.com/v1/forecast?latitude=40.7517&longitude=-73.9707`
+   - GET `https://api.open-meteo.com/v1/forecast?latitude=<LAT>&longitude=<LON>` (site coords from `src/local_config.h`)
      `&models=ncep_nbm_conus&hourly=precipitation&timezone=auto&forecast_days=2&precipitation_unit=inch`
    - Parse root-level `hourly.time[]` + `hourly.precipitation[]` (flat, unsuffixed — verified).
    - Scope the `JsonDocument` to the helper so its ~3–5 KB peak is freed on return.

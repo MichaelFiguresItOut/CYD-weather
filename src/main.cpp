@@ -71,18 +71,18 @@
 #define TFT_ROTATION  1
 
 // ---------------------------------------------------------------------------
-//  WiFi credentials
-//  Kept out of the public repo: real values live in src/wifi_config.h, which
-//  is gitignored. On a fresh clone, copy src/wifi_config.h.example to
-//  src/wifi_config.h and fill it in.
+//  WiFi credentials + site location
+//  Kept out of the public repo: real values live in src/local_config.h,
+//  which is gitignored. On a fresh clone, copy src/local_config.h.example
+//  to src/local_config.h and fill it in.
 // ---------------------------------------------------------------------------
-#include "wifi_config.h"
+#include "local_config.h"
 
 // ---------------------------------------------------------------------------
 //  Location & timezone (edit to match your site)
+//  Exact site coordinates (LOC_LAT / LOC_LON) live in src/local_config.h
+//  (gitignored).
 // ---------------------------------------------------------------------------
-static const float LOC_LAT = 40.7517;    // ZIP 10017, New York City (Manhattan)
-static const float LOC_LON = -73.9707;
 
 // The toolchain's tzset() parser is unreliable for TZ strings with DST rules,
 // so the system clock is kept on UTC and the local offset is computed in

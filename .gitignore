@@ -1,8 +1,8 @@
 # PlatformIO build artifacts (regenerable: pio run)
 .pio/
 
-# Local configuration (never commit real credentials)
-src/wifi_config.h
+# Local configuration (never commit real credentials or site location)
+src/local_config.h
 
 # Python
 __pycache__/

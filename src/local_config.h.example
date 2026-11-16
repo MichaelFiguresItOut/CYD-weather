@@ -1,0 +1,12 @@
+// Template for local_config.h.
+// Copy this file to local_config.h (same directory) and fill in your values.
+// local_config.h is gitignored and must never be committed.
+#pragma once
+
+// --- WiFi ---
+static const char* WIFI_SSID = "your-wifi-ssid";
+static const char* WIFI_PASS = "your-wifi-password";
+
+// --- Location (your site; sent to Open-Meteo as lat/lon) ---
+static const float LOC_LAT = 0.0;
+static const float LOC_LON = 0.0;
