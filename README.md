@@ -1,7 +1,16 @@
 # CYD Weather Station Dashboard — Reference
 
-Standalone ESP32 weather/clock dashboard. This file is the shared reference for
-future work: read it first in any new thread on this project.
+Standalone ESP32 weather/clock dashboard.
+
+**Repo:** [MichaelFiguresItOut/CYD-weather](https://github.com/MichaelFiguresItOut/CYD-weather)
+— `git clone https://github.com/MichaelFiguresItOut/CYD-weather.git`
+
+Fresh-clone setup: copy `src/local_config.h.example` to `src/local_config.h` and fill in
+your WiFi SSID/password and site lat/lon (never commit the real file); copy the 17
+outfit PNGs from `dogs/` to the SD card root (see Dog outfit images).
+
+This file is the shared reference for future work: read it first in any new thread on
+this project.
 
 ## Files
 - `src/main.cpp` — firmware: UI layout, weather fetch/parse, rendering pipeline
@@ -377,7 +386,7 @@ see Data sources & timing.)
   touch = immediate refetch.
 
 ## WiFi
-- Credentials live in `src/wifi_config.h` (gitignored — copy `src/wifi_config.h.example` to `src/wifi_config.h` and fill in your SSID/password; never commit real values); auto-reconnect in `loop()`.
+- Credentials + site location live in `src/local_config.h` (gitignored — copy `src/local_config.h.example` to `src/local_config.h` and fill in your WiFi SSID/password and your site's lat/lon; never commit real values); auto-reconnect in `loop()`.
 - HTTPS via `WiFiClientSecure` + `setInsecure()` (no CA cert). All three clients (main Open-Meteo,
   NBM cross-check, METAR) set `setConnectionTimeout(5000)` (TCP connect + socket read /
   SO_RCVTIMEO) and `setHandshakeTimeout(10)` — the core's default TLS handshake timeout is 120 s,
@@ -442,7 +451,7 @@ There is no shorter or longer variant; always do both, in this order:
    further in), **hit RESET** (button closer to the edge), **release BOOT**.
    Screen freezes/goes blank — normal; the ROM bootloader waits for data
    indefinitely, so there is no rush between steps 1 and 2.
-2. In `C:\PIWorkspace\CYD`, CMD: `pio run -t upload`
+2. In the project root: `pio run -t upload`
 
 Why both every time: `upload_port = COM4` and
 `board_upload.before_reset = no-reset` are set in platformio.ini, so esptool
