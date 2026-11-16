@@ -1,0 +1,20 @@
+# PlatformIO build artifacts (regenerable: pio run)
+.pio/
+
+# Local configuration (never commit real credentials)
+src/wifi_config.h
+
+# Python
+__pycache__/
+*.pyc
+
+# Scratch / working files (debug photos, frame extracts, serial captures)
+frames50/
+swipe test pics/
+tmp_*.png
+test/*.png
+test/*.jpg
+test/*.txt
+
+# Manual file backups (superseded by git history)
+*.bak-*

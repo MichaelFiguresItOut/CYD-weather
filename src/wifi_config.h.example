@@ -1,0 +1,6 @@
+// Template for wifi_config.h.
+// Copy this file to wifi_config.h (same directory) and fill in your network's
+// credentials. wifi_config.h is gitignored and must never be committed.
+#pragma once
+static const char* WIFI_SSID = "your-wifi-ssid";
+static const char* WIFI_PASS = "your-wifi-password";

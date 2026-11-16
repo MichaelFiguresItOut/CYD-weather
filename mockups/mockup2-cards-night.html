@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CYD Mockup 2 — Cards (Night)</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+  body{margin:0;background:#0d1117;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:'Segoe UI',system-ui,sans-serif;color:#c9d4e3}
+  .label{font-size:13px;letter-spacing:2px;margin-bottom:10px;color:#8fa3c0;text-transform:uppercase}
+  .bezel{background:#1a1f27;border:1px solid #2c3542;border-radius:18px;padding:14px;box-shadow:0 12px 40px rgba(0,0,0,.6)}
+  .screen{position:relative;width:320px;height:240px;overflow:hidden;border-radius:6px;background:linear-gradient(#101d33,#182b47);font-family:'Nunito',system-ui,sans-serif}
+  .note{margin-top:12px;font-size:11.5px;color:#6f87a8;max-width:420px;text-align:center;line-height:1.5}
+  /* twinkling stars */
+  .star{position:absolute;width:2.5px;height:2.5px;background:#bcd7ff;border-radius:50%;animation:twinkle 2.6s ease-in-out infinite;z-index:0}
+  @keyframes twinkle{0%,100%{opacity:.1}50%{opacity:.85}}
+  .pill{position:absolute;display:flex;align-items:center;gap:4px;border-radius:9px;font-size:9.5px;font-weight:700;padding:3px 8px;letter-spacing:.6px;z-index:2}
+  .p-l{left:10px;top:7px;background:#1b2f4d;border:1px solid #33507c;color:#8fc3e8}
+  .p-r{right:10px;top:7px;background:#2b2413;border:1px solid #6b5a26;color:#ffc857}
+  .clock{position:absolute;top:26px;left:0;width:320px;text-align:center;font-size:38px;font-weight:800;color:#fff;line-height:1;z-index:2}
+  .colon{animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:.15}}
+  .date{position:absolute;top:64px;left:0;width:320px;text-align:center;font-size:11.5px;font-weight:700;color:#9fc3e8;z-index:2}
+  .temp{position:absolute;left:14px;top:80px;font-size:44px;font-weight:800;color:#fff;line-height:1;z-index:2}
+  .temp small{font-size:19px;font-weight:700;color:#cfe3ff}
+  .midrow{position:absolute;left:14px;top:130px;width:204px;display:flex;align-items:center;justify-content:space-between;z-index:2}
+  .desc{display:flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;color:#c3d0e4;background:#22344f;border:1px solid #35507a;border-radius:8px;padding:2px 8px}
+  .hum{font-size:10px;font-weight:700;color:#8aa3c0}
+  .bar{position:absolute;left:14px;width:204px;border-radius:9px;display:flex;align-items:center;padding:0 10px;gap:8px;z-index:2}
+  .feels{top:152px;height:30px;background:#173a5f;border:1.5px solid #5aa9ff}
+  .feels .lbl{font-size:9px;font-weight:800;color:#9fd0ff;letter-spacing:1.2px}
+  .feels .val{margin-left:auto;font-size:17px;font-weight:800;color:#fff}
+  .rain{top:188px;height:28px;background:#12352a;border:1.5px solid #2f9e6b;justify-content:center}
+  .rain span{font-size:12px;font-weight:800;color:#7ee2b8;letter-spacing:.8px;display:flex;align-items:center;gap:6px}
+  .bottomrow{position:absolute;left:14px;top:219px;width:204px;display:flex;justify-content:space-between;font-size:9px;font-weight:700;color:#8aa3c0;z-index:2}
+  .bottomrow span{white-space:nowrap}
+  .hint{position:absolute;left:0;top:230px;width:320px;text-align:center;font-size:8px;font-weight:600;color:#5f7392;letter-spacing:.5px;z-index:2}
+  .dog{position:absolute;left:222px;top:106px;width:94px;height:126px;z-index:1;animation:bob 3s ease-in-out infinite alternate}
+  @keyframes bob{from{transform:translateY(0)}to{transform:translateY(-2px)}}
+</style>
+</head>
+<body>
+<div class="label">Mockup 2 · Cards — Night</div>
+<div class="bezel">
+  <div class="screen">
+    <div class="star" style="left:18px;top:34px"></div>
+    <div class="star" style="left:46px;top:52px;animation-delay:.7s"></div>
+    <div class="star" style="left:246px;top:42px;animation-delay:1.4s"></div>
+    <div class="star" style="left:296px;top:56px;animation-delay:.4s"></div>
+    <div class="star" style="left:270px;top:80px;animation-delay:1.9s"></div>
+    <div class="star" style="left:308px;top:92px;animation-delay:1.1s"></div>
+
+    <div class="pill p-l">WIFI NTP</div>
+    <div class="pill p-r">
+      <svg width="9" height="9" viewBox="0 0 24 24" fill="#ffc857"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      NIGHT
+    </div>
+
+    <div class="clock">1<span class="colon">:</span>03&nbsp;AM</div>
+    <div class="date">Saturday 14 November 2026</div>
+
+    <div class="temp">38.2<small>&nbsp;°F</small></div>
+
+    <div class="midrow">
+      <span class="desc">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="#c3d0e4"><path d="M6.5 19a4.5 4.5 0 0 1-.4-9A6 6 0 0 1 17.8 8.5 4.5 4.5 0 0 1 17 17z"/></svg>
+        Overcast
+      </span>
+      <span class="hum">HUM 98%</span>
+    </div>
+
+    <div class="bar feels">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9fd0ff" stroke-width="2"><path d="M12 2v20M4 6l16 12M20 6L4 18"/></svg>
+      <span class="lbl">FEELS LIKE</span><span class="val">32.7°F</span>
+    </div>
+    <div class="bar rain">
+      <span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="#7ee2b8"><path d="M12 2a9 9 0 0 1 9 9H3a9 9 0 0 1 9-9zm-1 18h2v3h-2z"/></svg>
+        NO RAIN EXPECTED
+      </span>
+    </div>
+
+    <div class="bottomrow"><span>TODAY H 43.7° L 34.5°</span><span>UPD 12:59 AM</span></div>
+    <div class="hint">touch to refresh</div>
+    <img class="dog" src="../dogs/very_cold.png" alt="dog">
+  </div>
+</div>
+<div class="note">Night twin of the Cards design: same card/bar structure on a deep blue gradient, with twinkling stars where the day version has white clouds. The icy feels-bar and green rain bar keep their prominence in both modes.</div>
+</body>
+</html>
