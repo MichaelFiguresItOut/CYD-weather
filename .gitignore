@@ -18,3 +18,7 @@ test/*.txt
 
 # Manual file backups (superseded by git history)
 *.bak-*
+
+# Agent notes / internal planning docs (local only, never synced)
+/AGENTS.md
+docs/FIRMWARE_REFACTOR_SPEC.md
