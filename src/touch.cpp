@@ -1,0 +1,174 @@
+#include "touch.h"
+#include "display.h"
+#include "settings.h"
+#include "weather.h"
+#include "wifi_conn.h"
+#include "render.h"
+#include "picker.h"
+
+// ---------------------------------------------------------------------------
+//  Touch targets (per-action debounce: 300 ms zone taps, 2 s refresh)
+//
+//  Generous hit rectangles. Checked in this order (BASIC layout values shown):
+//    dog corner zone  x >= width-96, y >= height-128   -> THEME picker;
+//                     swipe left/right to browse themes, tap to select
+//    clock band       y in [12,50)                      -> toggle 12h / 24h
+//    date band        y in [50,72)                       -> cycle "day month year"
+//                                                          <-> "weekday month, day, year"
+//    temperature band x < width-96, y in [92,138)        -> toggle F / C
+//    anywhere else                                                -> weather refresh
+//  Each band contains nothing but its item (see the layout comments above),
+//  so wide hit areas are safe. Bands follow the ACTIVE THEME: theme 0 derives
+//  from gLayout; themes 1-3 use fixed bands around their design positions.
+// ---------------------------------------------------------------------------
+struct TouchBands { int clkTop, clkBot, dateTop, dateBot, tempTop, tempBot, tempMaxX; };
+static TouchBands touchBands() {
+  switch (activeTheme) {
+    case 0:   // BASIC – original gLayout-derived zones
+      return { gLayout.statusBarY + glyphH(1) + 2, gLayout.clockY + glyphH(gLayout.clockSize),
+               gLayout.clockY + glyphH(gLayout.clockSize), gLayout.dateY + glyphH(gLayout.dateSize) + 4,
+               gLayout.tempY - 4, gLayout.tempY + glyphH(gLayout.tempSize) + 2,
+               tft.width() - gLayout.dogZoneW };
+    case 1:   // SKY – status y7, clock y19 (≤5.25), date y62, temp y76 (≤6)
+      return { 18, 61, 61, 75, 75, 125, 220 };
+    case 2:   // SPLIT – status y9, clock y24 (≤4.6), date y64, temp y80; left zone only
+      return { 20, 62, 62, 77, 77, 125, 210 };
+    default:  // BENTO – clock card [8,60) split at the date line; temp card [66,138]
+      return { 8, 40, 40, 60, 66, 138, 202 };
+  }
+}
+
+static bool inDogZone(int x, int y) {   // reserved dog corner zone (bottom-right)
+  if (activeTheme == THEME_BENTO) return x >= 206 && y >= 66;   // BENTO: whole right column = dog card
+  return x >= tft.width() - gLayout.dogZoneW && y >= tft.height() - gLayout.dogZoneH;
+}
+
+static bool inClockZone(int x, int y) {  // band between the status row and the date line
+  TouchBands b = touchBands();
+  return y >= b.clkTop && y < b.clkBot;
+}
+
+static bool inDateZone(int x, int y) {   // band just under the clock, around the date line
+  TouchBands b = touchBands();
+  return y >= b.dateTop && y < b.dateBot;
+}
+
+static bool inTempZone(int x, int y) {   // big temperature digits (left of the dog zone)
+  TouchBands b = touchBands();
+  return x >= 0 && x < b.tempMaxX && y >= b.tempTop && y < b.tempBot;
+}
+
+// Gesture tracking for the THEME picker: a gesture starts on touch-down and is
+// evaluated when all fingers lift. Horizontal movement > 24 px (and clearly
+// more than vertical) = swipe; otherwise a short, small-movement press = tap.
+struct SwipeState {
+  bool active = false;
+  int startX = 0, startY = 0;
+  int lastX = 0, lastY = 0;
+  uint32_t startMs = 0;
+};
+static SwipeState swipe;
+
+void handleTouch() {
+  lgfx::touch_point_t pts[5];
+  int n = tft.getTouch(pts, 5);
+
+  // ---- THEME picker: gesture tracking (swipe left/right, tap to select) ----
+  if (themeSelectScreen) {
+    static uint32_t lastAction = 0;   // debounce between completed gestures
+    if (!swipe.active && n > 0) {
+      swipe.active = true;
+      swipe.startX = swipe.lastX = pts[0].x;
+      swipe.startY = swipe.lastY = pts[0].y;
+      swipe.startMs = millis();
+      return;
+    }
+    if (swipe.active) {
+      if (n > 0) {                    // finger(s) still down: track the first point
+        swipe.lastX = pts[0].x;
+        swipe.lastY = pts[0].y;
+      } else {                        // all fingers lifted -> evaluate
+        swipe.active = false;
+        int dx = swipe.lastX - swipe.startX;
+        int dy = swipe.lastY - swipe.startY;
+        int adx = abs(dx), ady = abs(dy);
+        uint32_t dt = millis() - swipe.startMs;
+
+        if (adx > 24 && adx > 2 * ady) {          // horizontal swipe -> next/prev theme
+          if (millis() - lastAction < 300) return;   // debounce
+          lastAction = millis();
+          animatePickerSwipe(dx < 0 ? +1 : -1);   // slides old out / new in, updates previewTheme
+        } else if (dt < 600 && adx <= 12 && ady <= 12) {   // tap: select this theme
+          activeTheme = previewTheme;
+          saveTheme();
+          themeSelectScreen = false;
+          Serial.printf("[TOUCH] theme selected -> %s (%d)\n", themeName(activeTheme), activeTheme);
+          renderScreen();
+        } else {
+          Serial.println("[TOUCH] theme gesture ignored (long/ambiguous)");
+        }
+      }
+    }
+    return;   // main-display zones are inactive while the picker is up
+  }
+
+  if (n == 0) return;
+  int x = pts[0].x, y = pts[0].y;
+
+  // Per-action debounce (the action fires on touch-down): zone taps get
+  // 300 ms — just double-tap protection; a manual refresh keeps 2 s so a
+  // fast network can't be spammed with back-to-back fetches (the fetch
+  // itself is blocking, so the 2 s only guards the tail after it completes).
+  static uint32_t lastToggle = 0;   // dog / clock / date / temp zone taps
+  static uint32_t lastRefresh = 0;  // manual weather refresh
+  bool refreshTap = !inDogZone(x, y) && !inClockZone(x, y) &&
+                    !inDateZone(x, y) && !inTempZone(x, y);
+  if (refreshTap) {
+    if (millis() - lastRefresh < 2000) return;   // debounce
+    lastRefresh = millis();
+  } else {
+    if (millis() - lastToggle < 300) return;     // debounce
+    lastToggle = millis();
+  }
+
+  Serial.printf("[TOUCH] (%d,%d)\n", x, y);
+
+  if (inDogZone(x, y)) {                // dog corner zone -> THEME picker
+    themeSelectScreen = true;
+    previewTheme = activeTheme;
+    swipe.active = false;
+    Serial.println("[TOUCH] -> theme picker");
+    drawThemePicker();
+    return;
+  }
+
+  if (inClockZone(x, y)) {              // clock -> 12h <-> 24h
+    use24Hour = !use24Hour;
+    Serial.printf("[TOUCH] clock -> %s\n", use24Hour ? "24h" : "12h");
+    renderScreen();                           // full redraw in the new format
+    return;
+  }
+
+  if (inDateZone(x, y)) {               // date line -> cycle format
+    dateFormat = (dateFormat + 1) % 2;
+    Serial.printf("[TOUCH] date -> format %d\n", dateFormat);
+    renderScreen();
+    return;
+  }
+
+  if (inTempZone(x, y)) {               // temperature -> F <-> C
+    useCelsius = !useCelsius;
+    Serial.printf("[TOUCH] temp -> %s\n", useCelsius ? "C" : "F");
+    renderScreen();                           // all displayed temps convert together
+    return;
+  }
+
+  // Anywhere else: force a weather refresh (original behavior)
+  if (!wifiEnsureConnected()) {
+    renderScreen();   // show offline status
+    return;
+  }
+  bool got = fetchWeather();
+  if (got) refreshDogImage();
+  renderScreen();
+}

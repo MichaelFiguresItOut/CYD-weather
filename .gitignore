@@ -1,5 +1,6 @@
 # PlatformIO build artifacts (regenerable: pio run)
 .pio/
+compile_commands.json
 
 # Local configuration (never commit real credentials or site location)
 src/local_config.h
