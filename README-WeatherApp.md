@@ -13,8 +13,7 @@ Companion reference: `README-CYDCode.md` holds the CYD hardware / display / font
 material that was split out of this file. (This file will become the main README when
 `README-CYDCode.md` moves to `docs/`.)
 
-This file is the shared reference for future work: read it first in any new thread on
-this project.
+This file is the shared reference for future work: read it first in any new thread on this project.
 ## Files
 - `src/main.cpp` — firmware: UI layout, weather fetch/parse, rendering pipeline
 - `src/nunito_bff.h` — generated Nunito BFF font blobs (masters em9/10/12/13/20/48) shared by themes 1 (SKY), 2 (SPLIT) and 3 (BENTO); regenerate with `tools/make_nunito_bff.py`, verify with `tools/check_bff_space.py`
@@ -24,10 +23,9 @@ this project.
 - `test/capture_boot.py` / `test/enter_download_mode.py` — pyserial helpers over COM4: reset + capture boot log / force download mode (the force-download-mode path does NOT work on this board — use the manual button dance, see Build & flash)
 - `tools/make_nunito_bff.py` — rasterizes Nunito (weight 700) at em sizes 10/13/20/48 into BFF blobs → rewrites `src/nunito_bff.h` (needs Pillow; font source `tools/fonts/Nunito-wght.ttf`)
 - `tools/check_bff_space.py` — host-side verification: mimics `BFFfont` parsing exactly, decodes every glyph of every master against re-rasterized ground truth (`bad glyphs: 0/95` per master = good; exit code 1 on any mismatch)
-- `tools/preview_theme1.py` — renders theme 1 day/night mockups to `preview_theme1_{day,night}.png`, replicating the firmware's BFF parsing + placement math exactly
-- `tools/preview_theme3.py` — same for theme 2 (SPLIT; file named after mockup3), including LGFX's fixed-point fractional-scale glyph drawing (`python tools/preview_theme3.py [dog.png]`)
-- `tools/preview_theme4.py` — same for theme 3 (BENTO; file named after mockup4): mirrors `renderTheme3Nunito()` line for line (RGB565-exact palette, same fit math, procedural sun/moon/cloud/umbrella icons) → `preview_theme4_{day,night}.png`. Its `PAL` dicts duplicate `bentoDay`/`bentoNight` — update both together
-- `mockups/` — HTML design targets per theme (day + night each); see Mockups → glass fidelity section before trusting them pixel-for-pixel
+- `tools/preview_theme1.py` — renders theme 1 day/night to `preview_theme1_{day,night}.png`, replicating the firmware's BFF parsing + placement math exactly
+- `tools/preview_theme3.py` — same for theme 2 (SPLIT; the 3 in the filename is not the theme number), including LGFX's fixed-point fractional-scale glyph drawing (`python tools/preview_theme3.py [dog.png]`)
+- `tools/preview_theme4.py` — same for theme 3 (BENTO; the 4 in the filename is not the theme number): mirrors `renderTheme3Nunito()` line for line (RGB565-exact palette, same fit math, procedural sun/moon/cloud/umbrella icons) → `preview_theme4_{day,night}.png`. Its `PAL` dicts duplicate `bentoDay`/`bentoNight` — update both together
 - `platformio.ini` — build config (board, partitions, deps)
 - SD card root: 17 outfit PNGs from `dogs/` (all 95x128 RGBA with transparency — copy them to the card root, see Dog outfit images section); they live on the card, not in flash
 
@@ -112,7 +110,7 @@ Generous fixed rectangles in landscape canvas coords (320x240), checked in this 
 - Toggles are runtime state only (`use24Hour`, `dateFormat`, `useCelsius`); not persisted across reboot.
 - Each toggle does a full `renderScreen()`; the per-second partial updates share the same format helpers (`formatClock()`, `formatDateLine()`) and `drawClockAndDate()` keeps `lastClockBuf/lastDateBuf` in sync, so no ghosting or redundant repaints after a toggle.
 - While the THEME picker is up, `loop()` suppresses all main-display redraws (status changes, periodic refresh render, per-second partial updates) so it isn't clobbered; data fetching and dog-image reload still run normally. Picker gestures are evaluated on finger lift (`SwipeState` in `handleTouch()`): horizontal movement > 24 px (and more than twice the vertical) = **swipe** → next/previous theme (wraps around); a short (< 600 ms), small-movement press = **tap** → selects the previewed theme, saves it to NVS and returns to the main display. Ambiguous gestures are ignored.
-- The clock/date/temp bands above follow the active theme (`touchBands()`): theme 0 derives from `gLayout`, themes 1–3 use fixed bands around their mockup positions – so tapping where an item is drawn toggles it on every skin.
+- The clock/date/temp bands above follow the active theme (`touchBands()`): theme 0 derives from `gLayout`, themes 1–3 use fixed bands around their item positions – so tapping where an item is drawn toggles it on every skin.
 
 ### Themes (display skins)
 Four themes (`THEME_COUNT` = 4), each with automatic day/night variants driven by `nightMode()`:
@@ -121,16 +119,16 @@ Four themes (`THEME_COUNT` = 4), each with automatic day/night variants driven b
 |---|------|--------|
 | 0 | BASIC | the original layout – all positions from `gLayout`, background via `fillBackground()` |
 | 1 | SKY | full-screen sky gradient (3 stops), sun + clouds / moon + stars, status row, big centered clock, temperature left, description with mini cloud, FEELS and RAIN chips, dog in the corner (`renderTheme1()`); text is generated Nunito BFF fonts (see Theme 1 fonts section) with bitmap-font fallback |
-| 2 | SPLIT | solid data zone on the left [0,214); right sky panel x ≥ 214 with flat sun / crescent moon + stars, two stationary mockup-style clouds, DAY/NIGHT label and ground ellipse; text in the left zone, FEELS/RAIN chips span x 12..225 (213 px mockup content-box, so they cross the 214 seam by design — nothing must overpaint the 221..225 corner zone, see the dog-margin gotcha in Display gotchas), dog in the corner; Nunito BFF fonts like theme 1 (`renderTheme2()`) |
+| 2 | SPLIT | solid data zone on the left [0,214); right sky panel x ≥ 214 with flat sun / crescent moon + stars, two stationary clouds, DAY/NIGHT label and ground ellipse; text in the left zone, FEELS/RAIN chips span x 12..225 (213 px, so they cross the 214 seam by design — nothing must overpaint the 221..225 corner zone, see the dog-margin gotcha in Display gotchas), dog in the corner; Nunito BFF fonts like theme 1 (`renderTheme2()`) |
 | 3 | BENTO | rounded card grid: clock card on top (time + date + WIFI/DAY row), temperature card with accent bar + FEELS chip + description row, RAIN card, detail card (HUMIDITY / TODAY H-L / UPD-REFRESH) and a tall dog card on the right (`renderTheme3()`); text is Nunito BFF with bitmap-font fallback (see Theme 3 text below) |
 
 - All renderers draw through one `struct T` transform (scale + offset): the live display uses `T::ID`, and the picker renders the previewed theme at half scale into a 160×120 window via `setClipRect()` – so previews are true scaled-down versions of what a selection will show. The picker's swipe animation bakes the same half-scale render into sprites – see the Theme picker section below.
-- Colors: the mockups specify *displayed* colors; this panel inverts every pixel, so all palette values are stored pre-inverted (`C(r,g,b)` = ~rgb565(displayed)). Per-theme palettes: `SkyPal`, `CardsPal`, `SplitPal`, `BentoPal` (day/night instances) plus per-row background gradients via `bgDisplayed()` / `bgCode()` and `drawThemeBg()`.
+- Colors: all palettes store *displayed*-space colors pre-inverted (this panel inverts every pixel) — `C(r,g,b)` = ~rgb565(displayed). Per-theme palettes: `SkyPal`, `CardsPal`, `SplitPal`, `BentoPal` (day/night instances) plus per-row background gradients via `bgDisplayed()` / `bgCode()` and `drawThemeBg()`.
 - **Persistence**: the selected theme is saved to NVS (namespace `cydwx`, key `theme`) on selection (`saveTheme()`) and restored at boot before the first render (`loadTheme()` in `setup()`). On load, legacy/out-of-range indices are migrated one time (NVS key `themeVer` = 2 marks a migrated write): the removed CARDS theme (old index 2) falls back to BASIC (0); old SPLIT (3) → 2 and old BENTO (4) → 3.
 - Per-second partial updates are theme-aware: BASIC repaints only its clock/date bands; SKY clears + redraws the status/clock/date band (including sky decorations); SPLIT clears + redraws only the left-zone clock/date band [10..214]×[22..78) via `drawSplitClockDate()`; BENTO clears + redraws only the clock card (8,8,304,52) via `drawBentoClockCard()` — the card's own background is part of the redraw, so the clock tick never needs a full re-render (no flicker, no flash).
-- **Theme 2 (SPLIT) FEELS chip "second F" (seen on glass, 2026-11-15).** `buildTempStr()` = `"%.1f %s"` — the unit char is **already appended** to temp strings (`"32.7 F"`, `"--.-"` when invalid). The SPLIT FEELS chip then appended `tempUnitChar()` a second time, drawing `"32.7 FF"` on glass. Every other theme draws the `tempOrDash()`/`buildTempStr()` result as-is. Rule: never append `tempUnitChar()` to a string produced by those helpers. Note the app-wide convention is value + space + unit char (no degree sign), so glass shows `32.7 F` where the mockups say `32.7°F` — intentional, and the host previews mirror the firmware string (`"32.7 F"`). The one exception is theme 3 (BENTO)'s TODAY H-L row, which appends `\xB0` (°) on purpose because mockup4 specifies degree signs — `°` is in the BFF cmap (verified present before use).
+- **Theme 2 (SPLIT) FEELS chip "second F" (seen on glass, 2026-11-15).** `buildTempStr()` = `"%.1f %s"` — the unit char is **already appended** to temp strings (`"32.7 F"`, `"--.-"` when invalid). The SPLIT FEELS chip then appended `tempUnitChar()` a second time, drawing `"32.7 FF"` on glass. Every other theme draws the `tempOrDash()`/`buildTempStr()` result as-is. Rule: never append `tempUnitChar()` to a string produced by those helpers. Note the app-wide convention is value + space + unit char (no degree sign), so glass shows `32.7 F` where the design says `32.7°F` — intentional, and the host previews mirror the firmware string (`"32.7 F"`). The one exception is theme 3 (BENTO)'s TODAY H-L row, which appends `\xB0` (°) on purpose because the BENTO design specifies degree signs — `°` is in the BFF cmap (verified present before use).
 
-**Theme 3 (BENTO) text: Nunito BFF (rebuilt 2026-11-26).** `renderTheme3()` dispatches on `nunitoOK`: Nunito path `renderTheme3Nunito()`, fallback `renderTheme3Legacy()` (bitmap font, boot log `[FONT] ...`). Geometry is taken 1:1 from `mockup4-bento-day.html` (the mockup CSS class names are the layout source of truth — read the CSS, not the screenshot): clock card (8,8,304,52, r10) = 27 px clock (em48 @ ≤27/48, 320 px cap) + 10 px date (em10) + em10 status row (2.5 px dot + WIFI NTP left; sun/moon + DAY-NIGHT right); temp card (8,66,192,72) = 3.5 px accent bar, 34 px temp (em48 @ 34/48) + em20 @ 0.75 unit, 10 px FEELS chip (label + em10 value + crossed-arrows icon = three `drawLine` lw1 in a 9 px box), description row (10 px cloud + text, or "--" + "no data"); rain card (8,144,192,34) = 13 px umbrella/dot + 10 px label, whole group centered; detail card (8,184,192,48) = three 10 px rows HUMIDITY / TODAY H-L / UPDATED; dog card (206,66,106,166) = outfit centered in the 4/8 px margins + em10 caption. All procedural icons: day sun = fillCircle r3 + 8 lw1 rays at r5; crescent = fillCircle r4 with an offset r3 "bite" filled with the **card's** background color — the bite must match the surface the icon sits on (the white card, NOT the screen background) or a ring of the wrong color shows on the card. Palettes `bentoDay`/`bentoNight` mirror the mockup's displayed hexes (same `C()` 565 quantization as everything else — glass shows the quantized values). Preview: `tools/preview_theme4.py` mirrors the renderer line for line and its output matched the mockup4 screenshots (day + night). Per-minute update: `clearThemed(THEME_BENTO, t, 8, 8, 304, 52)` + `drawBentoClockCard()` — nothing else repaints.
+**Theme 3 (BENTO) text: Nunito BFF (rebuilt 2026-11-26).** `renderTheme3()` dispatches on `nunitoOK`: Nunito path `renderTheme3Nunito()`, fallback `renderTheme3Legacy()` (bitmap font, boot log `[FONT] ...`). Geometry: clock card (8,8,304,52, r10) = 27 px clock (em48 @ ≤27/48, 320 px cap) + 10 px date (em10) + em10 status row (2.5 px dot + WIFI NTP left; sun/moon + DAY-NIGHT right); temp card (8,66,192,72) = 3.5 px accent bar, 34 px temp (em48 @ 34/48) + em20 @ 0.75 unit, 10 px FEELS chip (label + em10 value + crossed-arrows icon = three `drawLine` lw1 in a 9 px box), description row (10 px cloud + text, or "--" + "no data"); rain card (8,144,192,34) = 13 px umbrella/dot + 10 px label, whole group centered; detail card (8,184,192,48) = three 10 px rows HUMIDITY / TODAY H-L / UPDATED; dog card (206,66,106,166) = outfit centered in the 4/8 px margins + em10 caption. All procedural icons: day sun = fillCircle r3 + 8 lw1 rays at r5; crescent = fillCircle r4 with an offset r3 "bite" filled with the **card's** background color — the bite must match the surface the icon sits on (the white card, NOT the screen background) or a ring of the wrong color shows on the card. Palettes `bentoDay`/`bentoNight` are the displayed hexes (same `C()` 565 quantization as everything else — glass shows the quantized values). Preview: `tools/preview_theme4.py` mirrors the renderer line for line. Per-minute update: `clearThemed(THEME_BENTO, t, 8, 8, 304, 52)` + `drawBentoClockCard()` — nothing else repaints.
 
 ### Theme 1 (SKY) text: generated Nunito BFF fonts
 Themes 1 (SKY), 2 (SPLIT) and 3 (BENTO) draw their text with generated Nunito BFF
@@ -157,7 +155,7 @@ gotchas".
 **Boot diagnostics still in the tree (TEMP-DEBUG — remove when the animation is final):** `ramProbe()` prints free/min-free heap + DMA vs 8-bit pool sizes (incl. largest block) before/after allocating two card sprites; `gTimingOn` would add per-frame `[ANIM] f=.. off=.. blit: N ms` lines if enabled (currently never set — the boot auto-swipe demo that used it was removed when animation testing ended). Related serial lines: `[TOUCH] theme swipe -> NAME (n)`, `[ANIM] pre-render A+B: N ms`, `[ANIM] A -> B: 8 frames (sprites|immediate) in N ms`, `[RAM] ...`.
 
 ### Layout (single source of truth for item positions/sizes)
-`struct Layout gLayout` is the single source of truth for **theme 0 (BASIC)**: every BASIC draw function, the per-second partial updates' clear bands and the theme-0 touch zones read from it – so re-tuning the original layout means assigning different values to `gLayout` and calling `renderScreen()`. Themes 1–3 have their own coordinates inside each `renderThemeN()` (matching the mockups in `mockups/`) and fixed touch bands (`touchBands()`). `glyphH(size)` = 8×size is the built-in Font0 glyph height (fixed-pitch 6×8 px per size unit, verified in the LovyanGFX source).
+`struct Layout gLayout` is the single source of truth for **theme 0 (BASIC)**: every BASIC draw function, the per-second partial updates' clear bands and the theme-0 touch zones read from it – so re-tuning the original layout means assigning different values to `gLayout` and calling `renderScreen()`. Themes 1–3 have their own coordinates inside each `renderThemeN()` and fixed touch bands (`touchBands()`). `glyphH(size)` = 8×size is the built-in Font0 glyph height (fixed-pitch 6×8 px per size unit, verified in the LovyanGFX source).
 
 Background: `fillBackground()` — day = solid white (write TFT_BLACK); night =
 vertical grey gradient via `nightBgColor(y)` (values pre-inverted for the panel).
@@ -251,65 +249,3 @@ There is no shorter or longer variant; always do both, in this order:
    Screen freezes/goes blank — normal; the ROM bootloader waits for data
    indefinitely, so there is no rush between steps 1 and 2.
 2. In the project root: `pio run -t upload`
-
-Why both every time: `upload_port = COM4` and
-`board_upload.before_reset = no-reset` are set in platformio.ini, so esptool
-does NOT put the chip into download mode itself. Plain `pio run -t upload`
-without step 1 is unreliable — it has sometimes connected (the DTR/RTS
-transitions when the port opens happened to reset the chip into download mode)
-and other times failed with "No serial data received" or "Wrong boot mode
-detected (0x13)". The button dance makes it deterministic.
-
-`test/enter_download_mode.py` was tried as a no-buttons alternative (2026-11-26):
-after its DTR/RTS sequence, `pio run -t upload` still failed with "No serial
-data received" — the script does NOT put this board into download mode (the auto-reset
-circuit reliably provides reset, but DTR is not observed to reach BOOT/GPIO0).
-Don't rely on it; the button dance is the only deterministic way in.
-
-### AI instruction: do NOT flash the firmware yourself; always tell the user how.
-After every successful build / whenever new firmware is provided, include the
-two flash steps above verbatim in the reply to the user — don't make them look
-them up.
-
-- Serial monitor: COM4 @ 115200. At boot, `[FONT] nunito bff: ok|FAILED - using bitmap fallback`
-  reports the theme-1 font load (see Theme 1 fonts section). Each refresh starts with
-  `[WX] rssi=.. freeHeap=..`; each fetch logs `[WX] ... day=0|1|? rain=... next=...`, and NBM/METAR
-  log their own `[NBM]`/`[METAR]` lines (freeHeap at request time, `DNS failed`, HTTP code) — an
-  explicit `DNS failed` line distinguishes DNS from TCP/TLS when a fetch returns -1.
-- **Opening COM4 resets the chip.** The CH340's DTR/RTS lines are wired to the auto-reset
-  circuit (the same path esptool uses to reach download mode). Any plain open of the port —
-  e.g. a pyserial log capture with no esptool sequence — toggles DTR and resets the ESP32.
-  Observed: screen goes blank, then a full normal boot follows (NOT download mode). Don't
-  casually open COM4 to peek at logs; use `test/capture_boot.py` (intentional reset +
-  capture) or ask the user to share the log.
-
-## Open items
-- (Resolved 2026-11-15: Theme 2 (SPLIT) FEELS/RAIN chip right edges looked "cut off"
-  on glass — the dog PNG's transparent left margin (device x 221..237) was
-  pushed as solid background color over the chip corner arc (chips now end at
-  x=225). LGFX's rounded-rect primitives were innocent (hand-traced for the
-  exact size). Fix: `dogRowSpan()` + opaque-span-only push in `drawDogBox()`.
-  See Display gotchas + Dog outfit images.)
-- **(In progress 2026-11-26) Theme 3 (BENTO) rebuilt on Nunito BFF + mockup4-exact
-  geometry** — builds clean (Flash ~52%), host preview (`tools/preview_theme4.py`)
-  matches the mockups; **not yet on glass** (never flash-verified yet). After
-  flashing: check the minute tick repaints only the clock card, the crescent's
-  bite has no halo ring on the white card, and the picker's half-scale preview
-  of BENTO renders cleanly (bffText @ 0.5× scale).
-- **TEMP-DEBUG hooks in the swipe animation**: `ramProbe()` at boot and the dormant `gTimingOn`
-  per-frame timing flag — remove once the animation is considered final (see Theme picker section).
-  The boot auto-swipe demo in `setup()` was removed when animation testing ended; don't re-add it.
-- (Resolved earlier: the night grey gradient was verified working on the glass;
-  the "looks white" impression was wrong.)
-- (Resolved 2026-11-15: the Theme 2 (SPLIT) night "yellow band" was the `bffText`/`bffCenter`
-  scale-argument bug — the "NIGHT" label drawn at ~49,000× scale. A software bug
-  misdiagnosed for a while as ST7789 stale state; the `displayHardReset()` sequence
-  was never the fix. See Display gotchas + Theme 1 fonts Gotcha #3.)
-- (Resolved 2026-11-15: Theme 2 (SPLIT) small text came out **garbled on glass** —
-  `draw_alpha_bitmap_common()` is a nearest-neighbor scaler whose integer floor
-  mapping drops whole 1-px source columns whenever scale < 1.0, so thin strokes
-  vanished (date read like "Snday I5 Mvember"). Fix: exact-size em9/em12 masters
-  added; every thin-stroke line now draws at scale 1.0 in the nearest master.
-  See Theme 1 fonts Gotcha #4.)
-- (Resolved 2026-11-15: Theme 2 (SPLIT) FEELS chip showed `"32.7 FF"` — `buildTempStr()`
-  already carries the unit char and the chip appended it again. See Themes section.)

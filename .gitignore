@@ -22,3 +22,6 @@ test/*.txt
 # Agent notes / internal planning docs (local only, never synced)
 /AGENTS.md
 docs/FIRMWARE_REFACTOR_SPEC.md
+
+# Theme design mockups (historical artifacts — themes are final; kept local only)
+mockups/

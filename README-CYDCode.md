@@ -57,7 +57,7 @@ split out of `README.md` (kept as-is for reference). Companion to
   Per-second updates must use partial repaints: `updateDynamicTexts()` +
   `clearRegion()`, which repaint only the exact bounding boxes with matching
   background rows. Full `renderScreen()` only on state changes (boot, fetch, touch).
-- **An edge that looks "cut off" on glass but correct in preview/mockup is being
+- **An edge that looks "cut off" on glass but correct in preview is being
   overpainted by something drawn LATER — audit the draw order, not the shape
   primitive or the panel.** (2026-11-15, SPLIT chip corner.) Symptom: the
   FEELS/RAIN chip right edges looked flat/clipped in a glass photo while the
@@ -75,8 +75,7 @@ split out of `README.md` (kept as-is for reference). Companion to
   → device x 238; the box starts at x=221), so the margin band 221..237
   painted panel gradient over the chip corner arc on every render. It was
   latent for a long time: the old 190 px chips ended at x=202, under nothing;
-  it appeared only when the chips were widened to the mockup content-box
-  (213 px, ending at x=225). Fix: `dogRowSpan()` (first/last alpha>0 column
+  it appeared only when the chips were widened to 213 px (ending at x=225). Fix: `dogRowSpan()` (first/last alpha>0 column
   per row) + `drawDogBox()` pushes only the opaque span and skips fully
   transparent rows — alpha>0 edge pixels still blend against
   `dogBgDisplayed()`. One shared routine, so every theme + the picker previews
@@ -108,7 +107,7 @@ split out of `README.md` (kept as-is for reference). Companion to
 ## Nunito BFF fonts (weather app themes 1–3: SKY, SPLIT, BENTO)
 (For the general workflow of adding *another* font, see the Fonts (BFF) section below.)
 
-Theme 1's text is drawn with **Nunito** (weight 700) at six fixed em sizes — 9/10/12/13/20/48 px — stored in flash as compact BFF blobs (`src/nunito_bff.h`, ~60 KB total). Coverage is **binary** (alpha thresholded to {0,15} at generation time — see gotcha #2 below). Theme 2 (SPLIT) reuses the same masters, but draws **small text at scale 1.0 in the master closest to the mockup's CSS pixel size** (mockup 9px → em9, 9.5px → em10, 10.5px → em10, 11.5px → em12, 12px → em12) — see gotcha #4, why sub-1.0 scaling is forbidden for thin-stroke fonts. Only the large thick-stroke glyphs keep fractional scaling (clock em48 @ ≤37/48, temp em48 @ ≤43/48, unit em20 @ 0.95, FEELS value em20 @ ≤0.9). Theme 3 (BENTO) likewise reuses the masters at 1.0 for its small text (status/detail em10, date em13, temp unit em20 @ 0.75) and keeps fractional scaling only on the thick em48 clock (≤27/48) and temp (34/48). Theme 0 (BASIC) still uses LGFX's built-in bitmap font.
+Theme 1's text is drawn with **Nunito** (weight 700) at six fixed em sizes — 9/10/12/13/20/48 px — stored in flash as compact BFF blobs (`src/nunito_bff.h`, ~60 KB total). Coverage is **binary** (alpha thresholded to {0,15} at generation time — see gotcha #2 below). Theme 2 (SPLIT) reuses the same masters, but draws **small text at scale 1.0 in the master closest to the design pixel size** (9px → em9, 9.5px → em10, 10.5px → em10, 11.5px → em12, 12px → em12) — see gotcha #4, why sub-1.0 scaling is forbidden for thin-stroke fonts. Only the large thick-stroke glyphs keep fractional scaling (clock em48 @ ≤37/48, temp em48 @ ≤43/48, unit em20 @ 0.95, FEELS value em20 @ ≤0.9). Theme 3 (BENTO) likewise reuses the masters at 1.0 for its small text (status/detail em10, date em13, temp unit em20 @ 0.75) and keeps fractional scaling only on the thick em48 clock (≤27/48) and temp (34/48). Theme 0 (BASIC) still uses LGFX's built-in bitmap font.
 
 - **One `BFFfont` per master** (`nunitoF9/F10/F12/F13/F20/F48`, loaded in `loadNunitoFonts()` at setup): LGFX's runtime font slot holds only one font, so six instances are created and drawn through the explicit-font overloads (`bffText`/`bffCenter` → `drawString(..., IFont*)`).
 - **Shrink-to-fit**: `bffFit(f, s, avail)` = min(1.0, avail / measured width); applied to clock (≤316 px), date (≤300), temperature, description, FEELS value and rain line so long strings never overflow their band.
@@ -132,16 +131,16 @@ Signature: `bffText/bffCenter(t, f, s, x|cx, y, color, float sc = 1.0f, uint16_t
 Fix: pass the scale explicitly — `bffCenter(..., p.skyLbl, 1.0f, bgCode(THEME_SPLIT, 267, 43))` — so `bgCode` lands in the `back` slot it was meant for. Rule: every `bffText`/`bffCenter` call has an explicit float in the 7th position.
 
 **Gotcha #4 (visible on glass): never scale a BFF master below 1.0 — small text garbles.**
-Theme 2 (SPLIT) was originally drawn at the mockup's exact fractional sizes (date em13 @ 10.5/13 ≈ 0.808, status em10 @ 0.95, row1/hint em10 @ 0.85, desc em13 @ 12/13, rain em13 @ 11.5/13). On glass the small lines came out garbled: 'Sunday 15 November 2026' read like "Snday I5 Mvember 2026", 'HUM 65%...' like "HM 65...", with strokes vanishing and neighbors merging. The font blobs were proven byte-correct (host decode matches Pillow rasterization), and the host preview at the same scales was crisp — so it was the runtime scaler. In `lgfx_fonts.cpp`, `BFFfont::drawChar()` maps every source pixel through `draw_alpha_bitmap_common()` even at scale 1.0, and that function is a **nearest-neighbor scaler with integer floor mapping**: dest pixel x samples source column `⌊x/scale⌋`. When scale < 1, consecutive destination columns share source columns, and some source columns map to *zero* destination columns and are simply dropped. At 0.808, 1-px-wide strokes (the right stem of 'H', the 'l' in 'November', the '1' in '15') land on a dropped column and vanish. Reproduced exactly on the host by simulating the same floor mapping (thin strokes disappear at the same positions as the photo). The reason 1.0 looks perfect and 0.808 garbles is that at sx = 65536 the mapping is the identity. Note the same decimation happens for *any* BFF text at a fractional scale — even the large clock (em48 @ 37/48) is slightly degraded, it's just invisible on 3-4 px thick strokes.
-Fix (2026-11-15): added em9/em12 masters to `make_nunito_bff.py`'s `MASTERS` and regenerated `src/nunito_bff.h`; Theme 2 now draws every thin-stroke line at **scale 1.0 in the nearest master** (status/date → em10, row1/hint/FEELS label → em9, desc/rain → em12) and only the big thick glyphs keep fractional scaling. Sizes land within 0.5 px of the mockup. Rule: for BFF fonts, either use a native-size master at 1.0, or only accept fractional scales on ≥20 px fonts where stroke width survives the decimation.
+Theme 2 (SPLIT) was originally drawn at the design's exact fractional sizes (date em13 @ 10.5/13 ≈ 0.808, status em10 @ 0.95, row1/hint em10 @ 0.85, desc em13 @ 12/13, rain em13 @ 11.5/13). On glass the small lines came out garbled: 'Sunday 15 November 2026' read like "Snday I5 Mvember 2026", 'HUM 65%...' like "HM 65...", with strokes vanishing and neighbors merging. The font blobs were proven byte-correct (host decode matches Pillow rasterization), and the host preview at the same scales was crisp — so it was the runtime scaler. In `lgfx_fonts.cpp`, `BFFfont::drawChar()` maps every source pixel through `draw_alpha_bitmap_common()` even at scale 1.0, and that function is a **nearest-neighbor scaler with integer floor mapping**: dest pixel x samples source column `⌊x/scale⌋`. When scale < 1, consecutive destination columns share source columns, and some source columns map to *zero* destination columns and are simply dropped. At 0.808, 1-px-wide strokes (the right stem of 'H', the 'l' in 'November', the '1' in '15') land on a dropped column and vanish. Reproduced exactly on the host by simulating the same floor mapping (thin strokes disappear at the same positions as the photo). The reason 1.0 looks perfect and 0.808 garbles is that at sx = 65536 the mapping is the identity. Note the same decimation happens for *any* BFF text at a fractional scale — even the large clock (em48 @ 37/48) is slightly degraded, it's just invisible on 3-4 px thick strokes.
+Fix (2026-11-15): added em9/em12 masters to `make_nunito_bff.py`'s `MASTERS` and regenerated `src/nunito_bff.h`; Theme 2 now draws every thin-stroke line at **scale 1.0 in the nearest master** (status/date → em10, row1/hint/FEELS label → em9, desc/rain → em12) and only the big thick glyphs keep fractional scaling. Sizes land within 0.5 px of the design sizes. Rule: for BFF fonts, either use a native-size master at 1.0, or only accept fractional scales on ≥20 px fonts where stroke width survives the decimation.
 
 ## Fonts (BFF): adding a new one
 All custom text on the CYD goes through LovyanGFX's **BFF** format (4bpp alpha, no compression). Themes 1, 2 and 3 use generated Nunito masters; theme 0 (BASIC) uses LGFX's built-in bitmap font (`glyphH(size)` = 8×size, fixed-pitch 6×8 px per size unit). To add another custom font, follow the exact workflow that produced `src/nunito_bff.h` — every step below exists because something broke when it was skipped.
 
 **Pipeline**: TTF (variable or static) → Pillow rasterize at chosen em sizes → BFF blob per master → `static const uint8_t` arrays in a generated header → one `lgfx::BFFfont` + `PointerWrapper` per master in main.cpp → draw with the explicit-font overloads.
 
-1. **Pick the font file and weight.** Variable fonts: load once, then `font.set_variation_by_axes([700])` before any rasterization or metric call (weight 700 matched the mockups). Keep the TTF under `tools/fonts/`.
-2. **Pick em sizes per layout band** (the set is 9/10/12/13/20/48 px — one master per mockup text size; theme 2 draws at 1.0 in the nearest master, see gotcha #4). Blob size scales with em² — em48 is ~36.9 KB of the ~59.6 KB total for six masters. Rasterize each glyph with an explicit anchor — `d.text((PX,PY), ch, font=f, fill=255, anchor="ls")` (left-baseline) at a fixed offset inside a padded canvas; ink bbox = `img.getbbox()`. Check top/bottom overflow against the FreeType line box (`asc/desc`) so glyphs fit their bands — the generator prints these stats.
+1. **Pick the font file and weight.** Variable fonts: load once, then `font.set_variation_by_axes([700])` before any rasterization or metric call (weight 700). Keep the TTF under `tools/fonts/`.
+2. **Pick em sizes per layout band** (the set is 9/10/12/13/20/48 px — one master per design text size; theme 2 draws at 1.0 in the nearest master, see gotcha #4). Blob size scales with em² — em48 is ~36.9 KB of the ~59.6 KB total for six masters. Rasterize each glyph with an explicit anchor — `d.text((PX,PY), ch, font=f, fill=255, anchor="ls")` (left-baseline) at a fixed offset inside a padded canvas; ink bbox = `img.getbbox()`. Check top/bottom overflow against the FreeType line box (`asc/desc`) so glyphs fit their bands — the generator prints these stats.
 3. **BFF layout** (what `tools/make_nunito_bff.py` emits; mirrors what `lgfx_fonts.cpp` parses):
    - Records: each = u32 total size + 4-char marker + payload, concatenated: `head`, `cmap`, `loca`, `glyf`.
    - `head`: 36-byte payload — font_size, ascent/descent (from FreeType metrics), bits_per_pixel=4, compression_algorithm=0, and per-master bit-widths for advance / bbox-x / bbox-y / w-h (`awb/xyb/whb`), sized to the max value across glyphs.
@@ -210,27 +209,29 @@ All hit while building the weather app's theme-picker swipe animation
 - **`writeImage(..., use_dma)` must match the buffer's pool.** Allocation ladder per card: `createSprite()` (DMA-capable pool → row DMA, `use_dma=true`) → `heap_caps_malloc(MALLOC_CAP_8BIT)` + `setBuffer()` (general heap, **not DMA-accessible** → `use_dma=false`, rows CPU-pumped, still smooth). LGFX treats external buffers as "Preallocated", so `deleteSprite()` never frees them — `freeSwipeSprites()` owns their lifecycle. Passing `use_dma=true` for an 8-bit-pool buffer sends garbage (the panel's DMA cannot read that pool).
 - **Keep the dog buffers loaded during the bake — no free/reload dance.** Free heap after WiFi/NTP is ~134 KB; two sprites (76.8 KB) + the dog (~36 KB) fit. The original approach freed the dog, allocated the sprites, then reloaded the dog before baking — but that reload peaks at ~100 KB against only ~93 KB of free heap and **always fails**, so every card was baked without the dog. Symptom: "dog missing in every theme" in the picker only (main screen fine, because it renders live). If a sprite can't be allocated at all, the immediate-mode fallback (re-render both themes clipped per frame) still runs, dog included.
 
-
-## Mockups → glass fidelity
-The HTML mockups in `mockups/` are design targets, not pixel promises. Every mismatch class below actually happened; the fixes make future mockups WYSIWYG.
-
-**Why they didn't look right on the CYD:**
-1. **Panel inversion (the big one).** The glass displays ~written: write cyan → see red, write white → see black. Porting a mockup's hex values straight into draw calls inverts the whole design. All palette structs store *pre-inverted* code-space values via `C(r,g,b)` = ~rgb565(displayed); the mockup hex is always the *displayed* color (see Display gotchas).
-2. **RGB565 quantization.** Browsers render 8-bit sRGB; the panel has 6-5-5 bits per channel, so every non-trivial color shifts slightly (blues most). A mockup that looks right in a browser can look muddy on glass even with correct inversion.
-3. **Font mismatch + metrics.** Mockup 1 specified VT323 (pixel font) and the firmware approximated it with LGFX's built-in bitmap font — different glyph shapes/widths, so text didn't sit where the mockup put it; the user then asked for smooth Nunito instead (see Theme 1 fonts section). Browser px sizes ≠ firmware em rasterization, CSS `letter-spacing` has no firmware equivalent (BFF advances are raw), and browser antialiasing ≠ 4bpp alpha. Note: `mockups/mockup1-sky-*.html` still specify VT323 while the implemented theme uses Nunito — update the HTML if it should stay the design source of truth.
-4. **Rotation/flip.** Glass is natively 240×320 portrait; the app uses 320×240 landscape via rotation 1 (= rotation 3 flipped 180°). A wrong rotation value gives mirrored/rotated content, not a layout bug.
-5. **No framebuffer (immediate mode).** Mockup animations (sun pulse, cloud drift, colon blink, dog bob) can't be full-screen redraws — they flicker. Only partial repaints of exact bounding boxes are possible; dynamic items must live in clearable bands (see Display gotchas + per-second update notes).
-6. **AA halos on the inverted panel.** Browser antialiasing blends glyph edges against the *actual* background pixel; LGFX blends intermediate alpha against the base color (black) in code space, and the glass then inverts — so AA text gets a bright halo around every letter instead of smooth edges. Fix: binary-coverage glyphs thresholded at generation time, which never blend (see Theme 1 fonts section, gotcha #2).
-
-**How to make a mockup that will look the same on glass:**
-1. Author at exactly **320×240 landscape** — canvas coords = firmware `T::ID` coords, 1:1 with `tft` drawing space.
-2. **Quantize the palette to RGB565 first**, then write the mockup CSS using the *expanded* 565 values (pick a color, round each channel to 6/5 bits, use that expanded hex in HTML). Then browser and glass show identical colors; firmware stores `C(r,g,b)` of the same displayed value.
-3. Use **the exact font + weight + em sizes** the firmware will rasterize (theme 1: Nunito 700 at 10/13/20/48 px), and avoid CSS letter-spacing (or account for it) so line widths match `bffWidth()`.
-4. **Validate with a pixel-exact host preview, not the browser**: replicate firmware parsing + placement math against the actual generated font blobs (`tools/preview_theme1.py` is the reference implementation). A correct preview guarantees correct glass rendering; a pretty browser mockup does not.
-5. Keep dynamic items in **clearable bands** so per-second updates can partial-repaint without flicker (mockups are static and can't show this constraint — design for it anyway).
-
 ## ArduinoJson gotcha (caused the "night never triggers" bug)
 - `variant | true` only accepts JSON **boolean literals**. Open-Meteo returns
   `is_day` as a **number** (0/1), so it always fell back to the default.
   Parse numerics explicitly: `!v.isNull() && (v == 0 || v == 1)`.
 
+## Flash procedure — ALWAYS these two steps, same every time
+There is no shorter or longer variant; always do both, in this order:
+1. **Download mode FIRST:** on the back of the CYD, **hold BOOT** (the button
+   further in), **hit RESET** (button closer to the edge), **release BOOT**.
+   Screen freezes/goes blank — normal; the ROM bootloader waits for data
+   indefinitely, so there is no rush between steps 1 and 2.
+2. In the project root: `pio run -t upload`
+
+Why both every time: `upload_port = COM4` and
+`board_upload.before_reset = no-reset` are set in platformio.ini, so esptool
+does NOT put the chip into download mode itself. Plain `pio run -t upload`
+without step 1 is unreliable — it has sometimes connected (the DTR/RTS
+transitions when the port opens happened to reset the chip into download mode)
+and other times failed with "No serial data received" or "Wrong boot mode
+detected (0x13)". The button dance makes it deterministic.
+
+`test/enter_download_mode.py` was tried as a no-buttons alternative (2026-11-26):
+after its DTR/RTS sequence, `pio run -t upload` still failed with "No serial
+data received" — the script does NOT put this board into download mode (the auto-reset
+circuit reliably provides reset, but DTR is not observed to reach BOOT/GPIO0).
+Don't rely on it; the button dance is the only deterministic way in.
