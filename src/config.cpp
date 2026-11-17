@@ -24,15 +24,34 @@ UserSettings userSettings = {
 // "themeVer" = numbering version; 1 = pre-CARDS-removal (5-theme) indices
 static Preferences themePrefs;
 void loadTheme() {
-  themePrefs.begin("cydwx", true);
-  uint32_t t = themePrefs.getUInt("theme", 0);
-  uint32_t v = themePrefs.getUInt("themeVer", 1);
-  if (v < 2) {   // one-time migration to the 4-theme numbering (CARDS was 2)
+  // NOTE: the second argument of Preferences::begin() is `readOnly`, not
+  // "create if missing" — opening the namespace read-only turns every putUInt
+  // into a silent no-op (it returns 0, which looks like "success").
+  if (!themePrefs.begin("cydwx")) {
+    Serial.println("[THEME] NVS open failed, theme persistence disabled");
+    return;
+  }
+  uint32_t rawT = themePrefs.getUInt("theme", 0);
+  uint32_t rawV = themePrefs.getUInt("themeVer", 1);
+  uint32_t t = rawT;
+  bool migrated = false;
+  if (rawV < 2) {   // one-time migration to the 4-theme numbering (CARDS was 2)
     if (t == 3)                            t = THEME_SPLIT;   // SPLIT: 3 -> 2
     else if (t == 4)                       t = THEME_BENTO;   // BENTO: 4 -> 3
     else if (t == 2 || t >= THEME_COUNT)   t = THEME_BASIC;   // old CARDS / unknown
-    themePrefs.putUInt("themeVer", 2);
+    size_t wmig = themePrefs.putUInt("themeVer", 2);
+    if (wmig == 0) Serial.println("[THEME] migration themeVer write failed");
+    migrated = true;
   }
   userSettings.theme = (t < THEME_COUNT) ? (int)t : 0;
+  Serial.printf("[THEME] NVS: stored theme=%lu ver=%lu%s\n",
+                (unsigned long)rawT, (unsigned long)rawV, migrated ? " (migrated)" : "");
 }
-void saveTheme() { themePrefs.putUInt("theme", (uint32_t)userSettings.theme); }
+void saveTheme() {
+  // putUInt() returns the bytes written (4) or 0 on failure.
+  size_t ok = themePrefs.putUInt("theme", (uint32_t)userSettings.theme);
+  // Record the current numbering with every save, so the legacy migration in
+  // loadTheme() can never re-fire after a fresh selection.
+  if (ok) ok = themePrefs.putUInt("themeVer", 2);
+  if (!ok) Serial.println("[THEME] NVS save failed");
+}

@@ -9,10 +9,10 @@ CAPTURE_S = 9.0
 s = serial.Serial(PORT, BAUD, timeout=1)
 time.sleep(0.2)
 
-# Hard reset: hold EN low (RTS high), GPIO0 released (DTR high), then release.
-s.dtr = True    # release GPIO0 -> normal boot (not download mode)
+# Hard reset via the CH340 auto-reset circuit (polarity verified on CYD):
+s.dtr = False   # keep GPIO0 released -> normal boot (not download mode)
 s.rts = True    # pull EN low -> chip in reset
-time.sleep(0.25)
+time.sleep(0.3)
 t0 = time.time()
 print(f"--- reset released at t=0, capturing {CAPTURE_S}s ---")
 s.rts = False   # release reset -> chip boots
