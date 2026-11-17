@@ -33,7 +33,7 @@ which documents the weather app itself.
 - **The panel displays INVERTED colors: displayed = ~written.** Verified against
   photos (write cyan 0x07FF → see red; write yellow 0xFFE0 → see blue).
   To display white, write `TFT_BLACK`; to display black, write `TFT_WHITE`.
-  All palette choices in main.cpp are made for the *displayed* result.
+  All palette choices in the firmware (per-theme palettes in `src/render.cpp`) are made for the *displayed* result.
 
   | Write (code value) | Displays on glass |
   |---|---|
@@ -128,7 +128,7 @@ Fix (2026-11-15): added em9/em12 masters to `make_nunito_bff.py`'s `MASTERS` and
 ## Fonts (BFF): adding a new one
 All custom text on the CYD goes through LovyanGFX's **BFF** format (4bpp alpha, no compression). Themes 1, 2 and 3 use generated Nunito masters; theme 0 (BASIC) uses LGFX's built-in bitmap font (`glyphH(size)` = 8×size, fixed-pitch 6×8 px per size unit). To add another custom font, follow the exact workflow that produced `src/nunito_bff.h` — every step below exists because something broke when it was skipped.
 
-**Pipeline**: TTF (variable or static) → Pillow rasterize at chosen em sizes → BFF blob per master → `static const uint8_t` arrays in a generated header → one `lgfx::BFFfont` + `PointerWrapper` per master in main.cpp → draw with the explicit-font overloads.
+**Pipeline**: TTF (variable or static) → Pillow rasterize at chosen em sizes → BFF blob per master → `static const uint8_t` arrays in a generated header → one `lgfx::BFFfont` + `PointerWrapper` per master (in the firmware, `src/render.cpp`) → draw with the explicit-font overloads.
 
 1. **Pick the font file and weight.** Variable fonts: load once, then `font.set_variation_by_axes([700])` before any rasterization or metric call (weight 700). Keep the TTF under `tools/fonts/`.
 2. **Pick em sizes per layout band** (the set is 9/10/12/13/20/48 px — one master per design text size; theme 2 draws at 1.0 in the nearest master, see gotcha #4). Blob size scales with em² — em48 is ~36.9 KB of the ~59.6 KB total for six masters. Rasterize each glyph with an explicit anchor — `d.text((PX,PY), ch, font=f, fill=255, anchor="ls")` (left-baseline) at a fixed offset inside a padded canvas; ink bbox = `img.getbbox()`. Check top/bottom overflow against the FreeType line box (`asc/desc`) so glyphs fit their bands — the generator prints these stats.
@@ -139,7 +139,7 @@ All custom text on the CYD goes through LovyanGFX's **BFF** format (4bpp alpha, 
    - `loca`: nloc+1 u32 offsets, relative to the glyf payload start.
    - `glyf`: one bitstream per glyph: header bits (advance, bbox_x, bbox_y, w, h) followed by 4bpp alpha pixels packed MSB-first **in the same stream** — no byte alignment between header and pixels. `bbox_y` is "distance from bottom of baseline, positive up" (Y-axis convention; sign errors flip glyphs vertically). Keep coverage binary ({0,15}): intermediate alpha gets blended against the black base color in code space and shows as a bright halo on this inverted panel (see Theme 1 fonts section, gotcha #2).
    - **Every glyph region must be padded to a full byte boundary** (`ceil(total_bits/8)`). Dropping trailing zero bytes truncates pixel-less glyphs (space, .notdef) below the header size → `loadGlyphInfo()` rejects them → `drawCharDummy()` draws a box outline in foreground color at every space. Glyphs with pixels survive only because `bit_stream_t::read_bits` clamps out-of-range reads to 0 (transparent). See Theme 1 fonts section for the on-glass symptom ("WIFI|NTP").
-4. **Integrate into main.cpp** (pattern at lines ~2019–2075): LGFX's runtime font slot holds only one font (`_runtime_font`), so create one `BFFfont` + `PointerWrapper` per master, `loadFont()` all of them in setup, and draw with the explicit-font overloads: `tft.drawString(s, x, y, &f)` / `drawCenterString`. Measure width with `getDefaultMetric` + `updateFontMetric` (sum of advances); shrink-to-fit = min(1.0, avail/width) via a `bffFit()`-style helper so long strings never overflow their band.
+4. **Integrate into the render module** (firmware pattern: the `Nunito BFF fonts` block in `src/render.cpp`, `static lgfx::BFFfont nunitoF*`): LGFX's runtime font slot holds only one font (`_runtime_font`), so create one `BFFfont` + `PointerWrapper` per master, `loadFont()` all of them in setup, and draw with the explicit-font overloads: `tft.drawString(s, x, y, &f)` / `drawCenterString`. Measure width with `getDefaultMetric` + `updateFontMetric` (sum of advances); shrink-to-fit = min(1.0, avail/width) via a `bffFit()`-style helper so long strings never overflow their band.
 5. **Always keep a fallback**: if any master fails `loadFont()`, render the original bitmap-font layout (`nunitoOK` pattern → `renderTheme1Legacy()`), and log at boot (`[FONT] nunito bff: ok|FAILED...`) so a bad font is visible, not silent.
 6. **Verify on host before flashing** (both steps are cheap; flashing is not):
    - `python tools/check_bff_space.py` — mimics `BFFfont` parsing exactly (including the out-of-range→0 clamp) and decodes every glyph of every master against re-rasterized ground truth. Must print `bad glyphs: 0/95`. **Ground truth = rendered ink bbox** (`d.text(...)` + `img.getbbox()`), *not* `font.getbbox()`: for variable fonts the two disagree (a first checker version flagged ~80 false mismatches on em48).

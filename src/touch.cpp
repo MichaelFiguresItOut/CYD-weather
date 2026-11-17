@@ -1,6 +1,6 @@
 #include "touch.h"
 #include "display.h"
-#include "settings.h"
+#include "config.h"
 #include "weather.h"
 #include "wifi_conn.h"
 #include "render.h"
@@ -23,7 +23,7 @@
 // ---------------------------------------------------------------------------
 struct TouchBands { int clkTop, clkBot, dateTop, dateBot, tempTop, tempBot, tempMaxX; };
 static TouchBands touchBands() {
-  switch (activeTheme) {
+  switch (userSettings.theme) {
     case 0:   // BASIC – original gLayout-derived zones
       return { gLayout.statusBarY + glyphH(1) + 2, gLayout.clockY + glyphH(gLayout.clockSize),
                gLayout.clockY + glyphH(gLayout.clockSize), gLayout.dateY + glyphH(gLayout.dateSize) + 4,
@@ -39,7 +39,7 @@ static TouchBands touchBands() {
 }
 
 static bool inDogZone(int x, int y) {   // reserved dog corner zone (bottom-right)
-  if (activeTheme == THEME_BENTO) return x >= 206 && y >= 66;   // BENTO: whole right column = dog card
+  if (userSettings.theme == THEME_BENTO) return x >= 206 && y >= 66;   // BENTO: whole right column = dog card
   return x >= tft.width() - gLayout.dogZoneW && y >= tft.height() - gLayout.dogZoneH;
 }
 
@@ -99,10 +99,10 @@ void handleTouch() {
           lastAction = millis();
           animatePickerSwipe(dx < 0 ? +1 : -1);   // slides old out / new in, updates previewTheme
         } else if (dt < 600 && adx <= 12 && ady <= 12) {   // tap: select this theme
-          activeTheme = previewTheme;
+          userSettings.theme = previewTheme;
           saveTheme();
           themeSelectScreen = false;
-          Serial.printf("[TOUCH] theme selected -> %s (%d)\n", themeName(activeTheme), activeTheme);
+          Serial.printf("[TOUCH] theme selected -> %s (%d)\n", themeName(userSettings.theme), userSettings.theme);
           renderScreen();
         } else {
           Serial.println("[TOUCH] theme gesture ignored (long/ambiguous)");
@@ -135,7 +135,7 @@ void handleTouch() {
 
   if (inDogZone(x, y)) {                // dog corner zone -> THEME picker
     themeSelectScreen = true;
-    previewTheme = activeTheme;
+    previewTheme = userSettings.theme;
     swipe.active = false;
     Serial.println("[TOUCH] -> theme picker");
     drawThemePicker();
@@ -143,22 +143,22 @@ void handleTouch() {
   }
 
   if (inClockZone(x, y)) {              // clock -> 12h <-> 24h
-    use24Hour = !use24Hour;
-    Serial.printf("[TOUCH] clock -> %s\n", use24Hour ? "24h" : "12h");
+    userSettings.use24Hour = !userSettings.use24Hour;
+    Serial.printf("[TOUCH] clock -> %s\n", userSettings.use24Hour ? "24h" : "12h");
     renderScreen();                           // full redraw in the new format
     return;
   }
 
   if (inDateZone(x, y)) {               // date line -> cycle format
-    dateFormat = (dateFormat + 1) % 2;
-    Serial.printf("[TOUCH] date -> format %d\n", dateFormat);
+    userSettings.dateFormat = (userSettings.dateFormat + 1) % 2;
+    Serial.printf("[TOUCH] date -> format %d\n", userSettings.dateFormat);
     renderScreen();
     return;
   }
 
   if (inTempZone(x, y)) {               // temperature -> F <-> C
-    useCelsius = !useCelsius;
-    Serial.printf("[TOUCH] temp -> %s\n", useCelsius ? "C" : "F");
+    userSettings.useCelsius = !userSettings.useCelsius;
+    Serial.printf("[TOUCH] temp -> %s\n", userSettings.useCelsius ? "C" : "F");
     renderScreen();                           // all displayed temps convert together
     return;
   }

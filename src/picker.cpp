@@ -1,13 +1,17 @@
 #include "picker.h"
 #include "display.h"
-#include "settings.h"
 #include "render.h"
+#include "theme_ids.h"
+
+// Picker UI state (declared in picker.h).
+bool     themeSelectScreen = false;   // true while the THEME picker is shown
+int      previewTheme      = 0;       // card highlighted in the picker
 
 // ---------------------------------------------------------------------------
 //  THEME picker screen
 //
 //  Half-scale preview of the selected theme (yellow border) on the normal
-//  background, with green bars top and bottom:
+//  background, with yellow bars top and bottom:
 //    top bar:    "THEME n/4: NAME"
 //    bottom bar: "< PREV" ... "NEXT >"
 //  Swipe left/right to change themes; tap (no swipe) selects.
@@ -16,13 +20,13 @@
 // stay in sync). The window is a true half-scale of the 320x240 dashboard.
 static const int kPrevW = 160, kPrevH = 120;
 static const int kPrevX = (320 - kPrevW) / 2, kPrevY = 60;
-static const uint16_t kBarC    = C(0x2e,0x7d,0x32);   // displayed green (design topbar)
+static const uint16_t kBarC    = C(0xff,0xd1,0x66);   // displayed yellow (matches the border)
 static const uint16_t kBorderC = C(0xff,0xd1,0x66);   // displayed yellow
 // TEMP-DEBUG: per-frame timing print + boot auto-demo (remove after diagnosis)
 static bool gTimingOn = false;
 
 // Everything on the picker screen EXCEPT the preview window: background,
-// yellow border, green bars with labels, hint line. idx is the theme whose
+// yellow border, yellow bars with labels, hint line. idx is the theme whose
 // name goes in the top bar (its neighbours fill the bottom bar).
 static void drawPickerChrome(int idx) {
   fillBackground();   // normal day/night background behind the preview
@@ -35,7 +39,7 @@ static void drawPickerChrome(int idx) {
   snprintf(top, sizeof(top), "THEME %d/%d: %s", idx + 1, THEME_COUNT, themeName(idx));  // 1-based for the user
   tft.setTextSize(1.5f);
   int tw = tft.textWidth(top);
-  tft.setTextColor(TFT_BLACK);   // displays white on the green bar
+  tft.setTextColor(TFT_WHITE);   // displays black on the yellow bar
   tft.drawString(top, (320 - tw) / 2, 4);
 
   // Hint in the gap above the preview
@@ -74,7 +78,7 @@ void drawThemePicker() {
 //  the right edge - or mirrored for "prev" - so the motion spans the entire
 //  320 px screen width, not just the central preview box.  Only the preview
 //  band (rows kPrevY..kPrevY+120, full width) is touched; the yellow border
-//  frame, green bars and hint stay put (the left/right border columns are
+//  frame, yellow bars and hint stay put (the left/right border columns are
 //  redrawn after each frame so the card slides behind the fixed frame).
 //
 //  Both cards are pre-rendered ONCE into two 160x120 sprites (38.4 KB each);

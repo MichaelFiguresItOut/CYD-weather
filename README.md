@@ -14,7 +14,9 @@ material split out of this file.
 
 This file is the shared reference for future work: read it first in any new thread on this project.
 ## Files
-- `src/main.cpp` — firmware: UI layout, weather fetch/parse, rendering pipeline
+- `src/main.cpp` — app shell: `setup()`/`loop()`, boot sequence, refresh cadence
+- `src/config.{h,cpp}` — centralized configuration: `UserSettings` (all user-adjustable settings + site defaults), app timing/NTP constants, NVS theme persistence (`loadTheme()`/`saveTheme()`); see the Configuration section
+- firmware modules: `src/display.{h,cpp}` (TFT init), `src/wifi_conn.{h,cpp}` (WiFi connect/auto-reconnect), `src/weather.{h,cpp}` (fetch/parse, SD card + dog image), `src/render.{h,cpp}` (themes + per-second partial updates), `src/picker.{h,cpp}` (theme picker + swipe animation), `src/touch.{h,cpp}` (touch zones + gestures), `src/time_util.{h,cpp}` (NTP + timezone), `src/metar.{h,cpp}` / `src/rain_timeline.{h,cpp}` (rain analysis), `src/theme_ids.h` (theme indices)
 - `src/nunito_bff.h` — generated Nunito BFF font blobs (masters em9/10/12/13/20/48) shared by themes 1 (SKY), 2 (SPLIT) and 3 (BENTO); regenerate with `tools/make_nunito_bff.py`, verify with `tools/check_bff_space.py`
 - `src/dog_image.{h,cpp}` — SD-card PNG decoder; keeps natural RGB565 + alpha, composites per row at draw time (see Dog outfit images section)
 - `lib/puff/` — vendored Mark Adler `puff.c/h` (public-domain minimal DEFLATE inflater; the core's zlib is not linked into the app)
@@ -31,7 +33,7 @@ This file is the shared reference for future work: read it first in any new thre
 ## Dog outfit images (SD card PNGs)
 Golden retriever in the bottom-right corner, wearing an outfit that matches the
 current weather. One of 17 RGBA PNGs on the SD card root is selected by
-`selectDogImage()` in main.cpp and reloaded whenever the selection changes.
+`selectDogImage()` in `src/weather.cpp` and reloaded whenever the selection changes.
 
 **Selection chart** (feels-like temperature in °F; rain overrides everything):
 | Condition | File |
@@ -80,7 +82,7 @@ current weather. One of 17 RGBA PNGs on the SD card root is selected by
   firmware is read-only on SD) — a missing dog after flashing is always this
   transient boot failure, not file loss.
 
-## Firmware: display items → where they live (all in src/main.cpp)
+## Firmware: display items → where they live (drawing in `src/render.cpp`; data in the `wx` global)
 | Item | Function / notes |
 |---|---|
 | "WIFI NTP" top-left | `drawStatusBar()`; shows `--OFF--` / ` --NTP` when down |
@@ -101,13 +103,13 @@ Generous fixed rectangles in landscape canvas coords (320x240), checked in this 
 | Tap target | Zone | Action |
 |---|---|---|
 | Dog corner zone | x ≥ width−96, y ≥ height−128 (the reserved 96×128 bottom-right corner); in BENTO theme the whole right column (x ≥ 206, y ≥ 66) is the dog card and opens it too | opens the **THEME picker**: swipe left/right to browse themes, tap to select (see Themes below) |
-| Clock band | y ∈ [12,50), full width | toggles clock between US 12-hour ("H:MM AM/PM") and 24-hour ("HH:MM") – `use24Hour` |
-| Date band | y ∈ [50,72), full width | cycles date line "Thursday 12 November 2026" ↔ "Thursday November 12, 2026" (weekday kept in place) – `dateFormat`. Longest case ("Wednesday September 30, 2026", 336 px at size 2 on this fixed-pitch font) is scaled down slightly by `dateLineFit()` so the line always fits |
-| Temperature band | x < width−96, y ∈ [92,138) | toggles all displayed temperatures (current / feels-like / today H-L) between °F and °C – `useCelsius`. wx values stay in °F internally; conversion happens at draw time only (`tempForDisplay()`) |
+| Clock band | y ∈ [12,50), full width | toggles clock between US 12-hour ("H:MM AM/PM") and 24-hour ("HH:MM") – `userSettings.use24Hour` |
+| Date band | y ∈ [50,72), full width | cycles date line "Thursday 12 November 2026" ↔ "Thursday November 12, 2026" (weekday kept in place) – `userSettings.dateFormat`. Longest case ("Wednesday September 30, 2026", 336 px at size 2 on this fixed-pitch font) is scaled down slightly by `dateLineFit()` so the line always fits |
+| Temperature band | x < width−96, y ∈ [92,138) | toggles all displayed temperatures (current / feels-like / today H-L) between °F and °C – `userSettings.useCelsius`. wx values stay in °F internally; conversion happens at draw time only (`tempForDisplay()`) |
 | Anywhere else | — | immediate weather refetch + full render (original behavior) |
 
 - Per-action debounce: zone taps (dog/clock/date/temp) are debounced 300 ms (double-tap protection — a tighter window would just toggle the value back); a manual refresh tap is debounced 2 s (the fetch is blocking, so this only guards the tail after a fast fetch completes — it prevents back-to-back manual fetches on a fast network). Both clocks are independent: a toggle does not delay a refresh and vice versa.
-- Toggles are runtime state only (`use24Hour`, `dateFormat`, `useCelsius`); not persisted across reboot.
+- Toggles are runtime state only (`userSettings.use24Hour`, `userSettings.dateFormat`, `userSettings.useCelsius`); not persisted across reboot (the theme is the only persisted setting — see Configuration).
 - Each toggle does a full `renderScreen()`; the per-second partial updates share the same format helpers (`formatClock()`, `formatDateLine()`) and `drawClockAndDate()` keeps `lastClockBuf/lastDateBuf` in sync, so no ghosting or redundant repaints after a toggle.
 - While the THEME picker is up, `loop()` suppresses all main-display redraws (status changes, periodic refresh render, per-second partial updates) so it isn't clobbered; data fetching and dog-image reload still run normally. Picker gestures are evaluated on finger lift (`SwipeState` in `handleTouch()`): horizontal movement > 24 px (and more than twice the vertical) = **swipe** → next/previous theme (wraps around); a short (< 600 ms), small-movement press = **tap** → selects the previewed theme, saves it to NVS and returns to the main display. Ambiguous gestures are ignored.
 - The clock/date/temp bands above follow the active theme (`touchBands()`): theme 0 derives from `gLayout`, themes 1–3 use fixed bands around their item positions – so tapping where an item is drawn toggles it on every skin.
@@ -124,7 +126,7 @@ Four themes (`THEME_COUNT` = 4), each with automatic day/night variants driven b
 
 - All renderers draw through one `struct T` transform (scale + offset): the live display uses `T::ID`, and the picker renders the previewed theme at half scale into a 160×120 window via `setClipRect()` – so previews are true scaled-down versions of what a selection will show. The picker's swipe animation bakes the same half-scale render into sprites – see the Theme picker section below.
 - Colors: all palettes store *displayed*-space colors pre-inverted (this panel inverts every pixel) — `C(r,g,b)` = ~rgb565(displayed). Per-theme palettes: `SkyPal`, `CardsPal`, `SplitPal`, `BentoPal` (day/night instances) plus per-row background gradients via `bgDisplayed()` / `bgCode()` and `drawThemeBg()`.
-- **Persistence**: the selected theme is saved to NVS (namespace `cydwx`, key `theme`) on selection (`saveTheme()`) and restored at boot before the first render (`loadTheme()` in `setup()`). On load, legacy/out-of-range indices are migrated one time (NVS key `themeVer` = 2 marks a migrated write): the removed CARDS theme (old index 2) falls back to BASIC (0); old SPLIT (3) → 2 and old BENTO (4) → 3.
+- **Persistence**: the selected theme is saved to NVS (namespace `cydwx`, key `theme`) on selection (`saveTheme()`) and restored at boot before the first render (`loadTheme()` in `setup()`); both live in `src/config.cpp` and operate on `userSettings.theme`. On load, legacy/out-of-range indices are migrated one time (NVS key `themeVer` = 2 marks a migrated write): the removed CARDS theme (old index 2) falls back to BASIC (0); old SPLIT (3) → 2 and old BENTO (4) → 3.
 - Per-second partial updates are theme-aware: BASIC repaints only its clock/date bands; SKY clears + redraws the status/clock/date band (including sky decorations); SPLIT clears + redraws only the left-zone clock/date band [10..214]×[22..78) via `drawSplitClockDate()`; BENTO clears + redraws only the clock card (8,8,304,52) via `drawBentoClockCard()` — the card's own background is part of the redraw, so the clock tick never needs a full re-render (no flicker, no flash).
 - **Theme 2 (SPLIT) FEELS chip "second F" (seen on glass, 2026-11-15).** `buildTempStr()` = `"%.1f %s"` — the unit char is **already appended** to temp strings (`"32.7 F"`, `"--.-"` when invalid). The SPLIT FEELS chip then appended `tempUnitChar()` a second time, drawing `"32.7 FF"` on glass. Every other theme draws the `tempOrDash()`/`buildTempStr()` result as-is. Rule: never append `tempUnitChar()` to a string produced by those helpers. Note the app-wide convention is value + space + unit char (no degree sign), so glass shows `32.7 F` where the design says `32.7°F` — intentional, and the host previews mirror the firmware string (`"32.7 F"`). The one exception is theme 3 (BENTO)'s TODAY H-L row, which appends `\xB0` (°) on purpose because the BENTO design specifies degree signs — `°` is in the BFF cmap (verified present before use).
 
@@ -137,7 +139,7 @@ debugging time (byte padding, binary coverage, the float scale argument, no sub-
 scaling) are in `docs/CYD-HARDWARE.md` — "Nunito BFF fonts" and "Fonts (BFF)" sections.
 
 ### Theme picker: static preview + swipe animation
-Tap the dog corner to open the picker (`themeSelectScreen`). It shows a true half-scale preview (160×120 window at (80,60)) of `previewTheme` inside a yellow border on the normal background, plus chrome (`drawPickerChrome()`): green top bar "THEME n/4: NAME" (n is 1-based for the user; both numbers come from the format string, so they track `THEME_COUNT` automatically), a "SWIPE LEFT/RIGHT - TAP TO SELECT" hint, and a green bottom bar with the neighbours' names ("< PREV" / "NEXT >"). Swipe left/right = next/prev theme (wraps); tap = select, save to NVS, return to the main display. `previewTheme` starts at `activeTheme` when the picker opens and is updated at the *start* of each swipe (so a follow-up tap or swipe acts on the new theme immediately).
+Tap the dog corner to open the picker (`themeSelectScreen`). It shows a true half-scale preview (160×120 window at (80,60)) of `previewTheme` inside a yellow border on the normal background, plus chrome (`drawPickerChrome()`): yellow top bar "THEME n/4: NAME" (n is 1-based for the user; both numbers come from the format string, so they track `THEME_COUNT` automatically), a "SWIPE LEFT/RIGHT - TAP TO SELECT" hint, and a yellow bottom bar with the neighbours' names ("< PREV" / "NEXT >"). Swipe left/right = next/prev theme (wraps); tap = select, save to NVS, return to the main display. `previewTheme` starts at `userSettings.theme` when the picker opens and is updated at the *start* of each swipe (so a follow-up tap or swipe acts on the new theme immediately). Picker UI state (`themeSelectScreen`, `previewTheme`) is owned by `src/picker.{h,cpp}`.
 
 **Swipe animation (`animatePickerSwipe()`): full-screen slide, sprite-baked cards.** The old card slides completely off the left edge while the new card enters from the right (mirrored for prev) — `kTravel` = 240 px, 8 frames, easeOutQuad, ~25 ms blit + 15 ms delay per frame ≈ 320 ms total. Redrawing both themes in immediate mode every frame takes ~50–120 ms/frame (visible stutter), so each theme is baked **once** into a 160×120 RGB565 sprite (38,400 B each) via `renderThemeIntoSprite()` (half-scale `T{0.5f, 0.5f, 0, 0}` through `renderTheme()` — includes the theme's background + the dog). Every animation frame then:
 
@@ -168,7 +170,7 @@ see Data sources & timing.)
 
 ## Data sources & timing
 - **Weather**: Open-Meteo `https://api.open-meteo.com/v1/forecast`,
-  your site's lat/lon (set in `src/local_config.h`; gitignored). Used for temperature, feels-like,
+  your site's lat/lon (`userSettings.lat`/`userSettings.lon`; defaults set in `src/local_config.h`, gitignored). Used for temperature, feels-like,
   humidity, today's high/low, the hourly rain forecast (next-rain scan) and day/night.
   Params:
   `current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,is_day,rain`
@@ -215,15 +217,42 @@ see Data sources & timing.)
   definitive end time is suppressed and the line shows `RAIN NOW - MAY CONTINUE`. NBM never derives
   a new end time. Runs only when RRFS declared a concrete end for the current period; every failure
   path (no WiFi, HTTP error, timeout, bad JSON) returns false → RRFS-only behavior retained.
-- **Time**: NTP (`configTzTime` + `time()`). US Eastern offset (UTC-5/UTC-4) is
-  computed in software by `localOffsetSec()` with DST rules (2nd Sun Mar →
-  1st Sun Nov). Do not rely on TZ-string parsing.
+- **Time**: NTP (`configTzTime` + `time()`) with the servers from `config.h` (the system clock is kept in UTC). The local offset is computed in software by `localOffsetSec()` from the DST rules in `userSettings.timezone` — default US Eastern (UTC-5/UTC-4, 2nd Sun Mar → 1st Sun Nov). Do not rely on TZ-string parsing.
 - **Refresh**: weather every 15 min (`WEATHER_REFRESH_MS`); at boot, wait up to
   `NTP_BOOT_WAIT_MS` (10 s) for NTP *before* the initial fetch so the rain line is
   valid from first paint; if NTP syncs later anyway and weather was already fetched,
   `loop()` refetches immediately on the sync transition. Clock display is H:MM AM/PM
   and repaints only when the minute changes (checked once per second in `loop()`);
   touch = immediate refetch.
+
+## Configuration
+All user-adjustable settings live in `src/config.{h,cpp}` — one `UserSettings`
+instance (`userSettings`), initialized with the defaults in `config.cpp`:
+
+| Field | Meaning | Default | Persisted |
+|---|---|---|---|
+| `lat` / `lon` | weather location (Open-Meteo requests) | from `src/local_config.h` (gitignored) | no |
+| `timezone` | `TimezoneRules`: std/DST offsets + DST transition (month, nth Sunday, wall-clock hour) | US Eastern (UTC-5/UTC-4, 2nd Sun Mar → 1st Sun Nov) | no |
+| `theme` | selected theme index (0–3) | BASIC (0), restored from NVS at boot | yes (NVS `cydwx`/`theme`) |
+| `useCelsius` | temperature display unit (F/C) | F | no |
+| `use24Hour` | clock format (12h/24h) | US 12-hour | no |
+| `dateFormat` | date line format (0/1) | "Thursday 12 November 2026" | no |
+
+- App timing constants (`WEATHER_REFRESH_MS` 15 min, `WX_MIN_RETRY_MS` 30 s,
+  `WIFI_RETRY_MS` 10 s, `NTP_BOOT_WAIT_MS` 10 s) and the NTP policy (UTC
+  clock, `NTP_TZ`, `NTP_SERVERS`) are `constexpr` in `config.h`.
+- The timezone is data, not code: `localOffsetSec()` applies whatever rules
+  `userSettings.timezone` holds. To change the site timezone, edit the
+  default in `config.cpp` (the DST-transition computation is generic over the
+  rules struct).
+- Deliberately **not** in the config struct (implementation-specific, not
+  user settings): WiFi credentials (stay in `src/local_config.h`, consumed
+  directly by `wifi_conn.cpp`), METAR/NBM/HTTP timeout and rain-algorithm
+  constants (`weather.cpp`), SD card pins (`weather.cpp`), and touch
+  debounce/swipe-threshold constants (`touch.cpp` / `picker.cpp`).
+- Only the theme is persisted today. A touchscreen settings UI and NVS
+  persistence for the remaining `UserSettings` fields are planned, not
+  implemented — `UserSettings` is the intended home for them.
 
 ## WiFi
 - Credentials + site location live in `src/local_config.h` (gitignored — copy `src/local_config.h.example` to `src/local_config.h` and fill in your WiFi SSID/password and your site's lat/lon; never commit real values); auto-reconnect in `loop()`.

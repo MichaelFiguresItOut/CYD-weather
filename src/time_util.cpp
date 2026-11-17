@@ -1,18 +1,13 @@
 #include <Arduino.h>
 #include <time.h>
 #include "time_util.h"
-#include "settings.h"
+#include "config.h"
 
 // The toolchain's tzset() parser is unreliable for TZ strings with DST rules,
 // so the system clock is kept on UTC and the local offset is computed in
-// software instead.
-//
-// US Eastern Time (America/New_York):
-//   EST = UTC-5  (standard time)
-//   EDT = UTC-4  (daylight saving time, since 2007: starts 02:00 local on the
-//                second Sunday of March, ends 02:00 local on the first Sunday
-//                of November)
-static const char* NTP_TZ = "UTC";
+// software instead, from the configured timezone rules (userSettings.timezone,
+// default US Eastern – see config.h).
+// The UTC clock policy + NTP servers are configuration (config.h).
 
 // Day of week (0=Sunday .. 6=Saturday) – Tomohiko Ito's algorithm.
 int dayOfWeek(int y, int m, int d) {
@@ -35,21 +30,31 @@ long makeUtcTime(int y, int mo, int d, int h, int mi, int s) {
   return daysFromCivil(y, mo, d) * 86400L + h * 3600L + mi * 60L + s;
 }
 
-// Current US Eastern offset in seconds (negative = west of UTC).
+// Current local offset in seconds (negative = west of UTC) under the
+// configured timezone rules.
 long localOffsetSec(time_t utc) {
+  const TimezoneRules& tz = userSettings.timezone;
   struct tm t;
   gmtime_r(&utc, &t);
   int y = t.tm_year + 1900;
 
-  // DST starts: second Sunday of March at 02:00 EST (= 07:00 UTC)
-  int marFirstSun = 1 + ((7 - dayOfWeek(y, 3, 1)) % 7);
-  time_t dstStartUtc = makeUtcTime(y, 3, marFirstSun + 7, 7, 0, 0);
+  // DST start: (dstStartWeek-th) Sunday of dstStartMonth at dstStartHourLocal
+  // wall-clock time, while still on standard time. The epoch of that moment
+  // is the wall time (treated as UTC) minus the standard offset:
+  // utc = local - offset.
+  int startFirstSun = 1 + ((7 - dayOfWeek(y, tz.dstStartMonth, 1)) % 7);
+  time_t dstStartUtc = makeUtcTime(y, tz.dstStartMonth,
+                                   startFirstSun + 7 * (tz.dstStartWeek - 1),
+                                   tz.dstStartHourLocal, 0, 0) - tz.stdOffsetSec;
 
-  // DST ends: first Sunday of November at 02:00 EDT (= 06:00 UTC)
-  int novFirstSun = 1 + ((7 - dayOfWeek(y, 11, 1)) % 7);
-  time_t dstEndUtc   = makeUtcTime(y, 11, novFirstSun, 6, 0, 0);
+  // DST end: (dstEndWeek-th) Sunday of dstEndMonth at dstEndHourLocal
+  // wall-clock time, with the clock already on DST time.
+  int endFirstSun = 1 + ((7 - dayOfWeek(y, tz.dstEndMonth, 1)) % 7);
+  time_t dstEndUtc   = makeUtcTime(y, tz.dstEndMonth,
+                                   endFirstSun + 7 * (tz.dstEndWeek - 1),
+                                   tz.dstEndHourLocal, 0, 0) - tz.dstOffsetSec;
 
-  return (utc >= dstStartUtc && utc < dstEndUtc) ? -4L * 3600 : -5L * 3600;
+  return (utc >= dstStartUtc && utc < dstEndUtc) ? tz.dstOffsetSec : tz.stdOffsetSec;
 }
 
 bool ntpSynced = false;
@@ -66,17 +71,17 @@ void formatUS12(char* out, size_t n, const struct tm* lt, bool withSeconds) {
 
 // Clock string in the currently selected mode (US 12-hour or 24-hour).
 void formatClock(char* out, size_t n, const struct tm* lt) {
-  if (use24Hour) snprintf(out, n, "%02d:%02d", lt->tm_hour, lt->tm_min);
+  if (userSettings.use24Hour) snprintf(out, n, "%02d:%02d", lt->tm_hour, lt->tm_min);
   else           formatUS12(out, n, lt, false);
 }
 
 // Widest possible clock string in the current mode (partial-update box size).
-const char* clockMaxString() { return use24Hour ? "23:59" : "12:59 PM"; }
+const char* clockMaxString() { return userSettings.use24Hour ? "23:59" : "12:59 PM"; }
 
 // Last-update time in the currently selected clock mode (US 12h or 24h), so the
 // "Updated ..." / "UPD ..." lines follow the same tap toggle as the main clock.
 void formatUpdTime(char* out, size_t n, const struct tm* lt, bool withSeconds) {
-  if (use24Hour) snprintf(out, n, withSeconds ? "%02d:%02d:%02d" : "%02d:%02d",
+  if (userSettings.use24Hour) snprintf(out, n, withSeconds ? "%02d:%02d:%02d" : "%02d:%02d",
                           lt->tm_hour, lt->tm_min, lt->tm_sec);
   else           formatUS12(out, n, lt, withSeconds);
 }
@@ -86,19 +91,19 @@ void formatUpdTime(char* out, size_t n, const struct tm* lt, bool withSeconds) {
 // place, "Thursday November 12, 2026". Longest case ("Wednesday September 30,
 // 2026") is 336 px at size 2 – dateLineFit() scales such lines down slightly.
 void formatDateLine(char* out, size_t n, const struct tm* lt) {
-  if (dateFormat == 0) { strftime(out, n, "%A %d %B %Y", lt); return; }
+  if (userSettings.dateFormat == 0) { strftime(out, n, "%A %d %B %Y", lt); return; }
   strftime(out, n, "%A %B %d, %Y", lt);
 }
 
 // Temperature conversion for display only (wx values stay in °F internally).
-float tempForDisplay(float f) { return useCelsius ? (f - 32.0f) * 5.0f / 9.0f : f; }
-const char* tempUnitChar()    { return useCelsius ? "C" : "F"; }
+float tempForDisplay(float f) { return userSettings.useCelsius ? (f - 32.0f) * 5.0f / 9.0f : f; }
+const char* tempUnitChar()    { return userSettings.useCelsius ? "C" : "F"; }
 
 // ---------------------------------------------------------------------------
 //  NTP (configTzTime is provided by the ESP32 Arduino core itself)
 // ---------------------------------------------------------------------------
 void configureTime() {
-  configTzTime(NTP_TZ, "pool.ntp.org", "time.google.com", "time.windows.com");
+  configTzTime(NTP_TZ, NTP_SERVERS[0], NTP_SERVERS[1], NTP_SERVERS[2]);
 }
 
 // The core has no timeStatus(); treat a post-2023 epoch value as "synced".

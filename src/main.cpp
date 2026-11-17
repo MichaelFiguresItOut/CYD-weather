@@ -31,7 +31,7 @@
 #include "display.h"
 #include "wifi_conn.h"
 #include "weather.h"
-#include "settings.h"
+#include "config.h"
 #include "render.h"
 #include "picker.h"
 #include "touch.h"
@@ -51,7 +51,7 @@ void setup() {
   weatherInitSdAndDog();
   // Restore the last selected display theme (NVS), then show it.
   loadTheme();
-  Serial.printf("[THEME] active: %s (%d)\n", themeName(activeTheme), activeTheme);
+  Serial.printf("[THEME] active: %s (%d)\n", themeName(userSettings.theme), userSettings.theme);
   renderScreen();
 
   // WiFi

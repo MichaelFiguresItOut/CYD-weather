@@ -1,6 +1,6 @@
 #include "render.h"
 #include "weather.h"
-#include "settings.h"
+#include "config.h"
 #include "time_util.h"
 #include "dog_image.h"
 #include "nunito_bff.h"
@@ -856,7 +856,7 @@ void renderTheme(int idx, const T& t) {
 // LovyanGFX v1 draws in immediate mode – every call goes straight to the
 // panel over SPI, so there is no separate framebuffer flush step.
 void renderScreen() {
-  renderTheme(activeTheme, T::ID);
+  renderTheme(userSettings.theme, T::ID);
 }
 
 // ---------------------------------------------------------------------------
@@ -883,7 +883,7 @@ void updateDynamicTexts() {
   formatClock(clockBuf, sizeof(clockBuf), &lt);   // respects use24Hour
   formatDateLine(dateBuf, sizeof(dateBuf), &lt);  // respects dateFormat
 
-  if (activeTheme == 0) {
+  if (userSettings.theme == 0) {
     // ---- Big clock (gLayout.clockY/clockSize) – repaint only on minute change ----
     if (strcmp(clockBuf, lastClockBuf) != 0) {
       strncpy(lastClockBuf, clockBuf, sizeof(lastClockBuf) - 1);
@@ -913,7 +913,7 @@ void updateDynamicTexts() {
     return;
   }
 
-  if (activeTheme == THEME_SKY) {
+  if (userSettings.theme == THEME_SKY) {
     bool clockChanged = strcmp(clockBuf, lastClockBuf) != 0;
     bool dateChanged  = strcmp(dateBuf, lastDateBuf) != 0;
     if (!clockChanged && !dateChanged) return;
@@ -922,7 +922,7 @@ void updateDynamicTexts() {
     // Clear the dynamic band (status row y~7 + clock + date line ending ~y73),
     // then redraw it. Sky decorations live inside this band and are repainted
     // right after, so nothing is lost.
-    clearThemed(activeTheme, t, 4, 4, 312, 72);
+    clearThemed(userSettings.theme, t, 4, 4, 312, 72);
     if (clockChanged) {
       strncpy(lastClockBuf, clockBuf, sizeof(lastClockBuf) - 1);
       lastClockBuf[sizeof(lastClockBuf) - 1] = '\0';
@@ -932,12 +932,12 @@ void updateDynamicTexts() {
       lastDateBuf[sizeof(lastDateBuf) - 1] = '\0';
     }
 
-    drawSkyDecor(activeTheme, t);   // sun/moon/clouds/stars live in this band
+    drawSkyDecor(userSettings.theme, t);   // sun/moon/clouds/stars live in this band
     drawSkyDynamicBand(t);   // Nunito band (bitmap fallback inside)
     return;
   }
 
-  if (activeTheme == THEME_SPLIT) {   // SPLIT: repaint only the clock/date band.
+  if (userSettings.theme == THEME_SPLIT) {   // SPLIT: repaint only the clock/date band.
     bool clockChanged = strcmp(clockBuf, lastClockBuf) != 0;
     bool dateChanged  = strcmp(dateBuf, lastDateBuf) != 0;
     if (!clockChanged && !dateChanged) return;   // no blinking colon: nothing moves per second
@@ -955,7 +955,7 @@ void updateDynamicTexts() {
     return;
   }
 
-  if (activeTheme == THEME_BENTO) {   // BENTO: repaint only the clock card. Its text is
+  if (userSettings.theme == THEME_BENTO) {   // BENTO: repaint only the clock card. Its text is
                             // minute-granular, so a per-second tick is a no-op
                             // (zero SPI traffic -> no flash); once a minute
                             // only the 304x52 card band is cleared + redrawn.

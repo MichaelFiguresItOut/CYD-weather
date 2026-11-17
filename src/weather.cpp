@@ -10,6 +10,7 @@
 #include "time_util.h"
 #include "wifi_conn.h"
 #include "dog_image.h"
+#include "config.h"
 
 // ---------------------------------------------------------------------------
 //  SD card slot (from the CYD MCU schematic ESP32-2432S032-MCU-V1.0):
@@ -22,21 +23,8 @@
 #define SD_MISO       19
 #define SD_MOSI       23
 
-// ---------------------------------------------------------------------------
-//  WiFi credentials + site location
-//  Kept out of the public repo: real values live in src/local_config.h,
-//  which is gitignored. On a fresh clone, copy src/local_config.h.example
-//  to src/local_config.h and fill it in.
-// ---------------------------------------------------------------------------
-#include "local_config.h"
-
-// ---------------------------------------------------------------------------
-//  Refresh cadence
-// ---------------------------------------------------------------------------
-const uint32_t WEATHER_REFRESH_MS = 15UL * 60UL * 1000UL;   // 15 min
-const uint32_t WIFI_RETRY_MS      = 10UL * 1000UL;           // 10 s
-const uint32_t WX_MIN_RETRY_MS    = 30UL * 1000UL;           // min gap between fetch attempts
-const uint32_t NTP_BOOT_WAIT_MS   = 10UL * 1000UL;           // max wait for time before initial fetch
+// Site location (lat/lon) and the fetch cadence are configuration: see
+// userSettings in config.cpp (defaults from local_config.h) and config.h.
 
 // ---------------------------------------------------------------------------
 //  Live observation sources (METAR via NOAA Aviation Weather Center)
@@ -108,7 +96,7 @@ static bool nbmIndicatesContinuation(const StepTime& end) {
 
   HTTPClient nHttp;
   String url = String("https://api.open-meteo.com/v1/forecast?latitude=")
-             + String(LOC_LAT, 4) + "&longitude=" + String(LOC_LON, 4)
+             + String(userSettings.lat, 4) + "&longitude=" + String(userSettings.lon, 4)
              + "&models=ncep_nbm_conus&hourly=precipitation"   // NBM hourly trailing sums (inches)
              + "&timezone=auto&forecast_days=2"
              + "&temperature_unit=fahrenheit&precipitation_unit=inch";
@@ -194,7 +182,7 @@ bool fetchWeather() {
 
     HTTPClient http;
     String url = String("https://api.open-meteo.com/v1/forecast?latitude=")
-               + String(LOC_LAT, 4) + "&longitude=" + String(LOC_LON, 4)
+               + String(userSettings.lat, 4) + "&longitude=" + String(userSettings.lon, 4)
                + "&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,is_day,rain"
                + "&daily=temperature_2m_max,temperature_2m_min"
                + "&hourly=rain"                    // rain beyond the 15-min window (local wall-clock hours)

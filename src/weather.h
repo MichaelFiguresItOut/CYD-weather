@@ -30,11 +30,8 @@ struct WeatherData {
   time_t   lastUpdateEpoch = 0;  // UTC epoch of last successful fetch (displayed)
 };
 
-// Shared timing constants (defined in weather.cpp).
-extern const uint32_t WEATHER_REFRESH_MS;
-extern const uint32_t WIFI_RETRY_MS;
-extern const uint32_t WX_MIN_RETRY_MS;
-extern const uint32_t NTP_BOOT_WAIT_MS;
+// (Timing constants WEATHER_REFRESH_MS / WIFI_RETRY_MS / WX_MIN_RETRY_MS /
+//  NTP_BOOT_WAIT_MS live in config.h.)
 
 extern WeatherData wx;          // current weather state (fetched over HTTPS)
 extern bool sdCardReady;        // SD card present and initialized
