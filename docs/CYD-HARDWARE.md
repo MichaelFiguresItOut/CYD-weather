@@ -1,10 +1,10 @@
 # CYD (ESP32-2432S032C-I) — Hardware & Library Programming Reference
 
 Board, display, font, SD-card and flashing knowledge for programming the LILYGO CYD,
-split out of `README.md` (kept as-is for reference). Companion to
-`README-WeatherApp.md`, which documents the weather app itself.
+split out of the original monolithic `README.md`. Companion to `README.md`,
+which documents the weather app itself.
 
-## Board: ESP32-2432S032C-I ("CYD")
+## Board: ESP32-2432S032C-I Cheap Yellow Display ("CYD")
 - ESP32 dual-core, 4 MB flash, CH340 USB serial → **COM4** @ 115200 baud
   (**USB-C cable into the PC's front USB-C port** — this is the working setup).
   The old USB-A cable into a rear USB-A port enumerated as COM3 but gave flaky
@@ -20,25 +20,7 @@ split out of `README.md` (kept as-is for reference). Companion to
 | Touch SDA / SCL / RST | 33 / 32 / 25 |
 
 ## Display gotchas (cost real debugging time — read before touching UI code)
-- **The ST7789 is NOT reset when the ESP32 resets.** The RST button and
-  flashing only reset the MCU; the display controller keeps its own volatile
-  state (internal address/window registers, GRAM), and LGFX's `Panel_ST7789`
-  init list does NOT include SWRESET (0x01) — its only reset is a pin pulse
-  via `cfg.pin_rst`. So `setup()` starts with `displayHardReset()`: a
-  100 ms hardware pulse on `TFT_RST` (GPIO 12) followed by an explicit
-  SWRESET over SPI, then `tft.init()`. **Keep this** — it is cheap defense
-  against genuinely stale panel state (e.g. a brownout glitch during boot).
 
-  **Correction (2026-11-15): the "persistent pale/mottled patches" that
-  originally motivated this sequence were NOT a panel-state problem.** They
-  were a software rendering bug — the SPLIT theme's `bffCenter` scale-argument bug
-  (post-mortem in the Theme 1 fonts section, Gotcha #3). A misdiagnosed
-  software bug re-renders at every boot, so it *always* survives reset and
-  power cycle — which is exactly what made the panel-reset hypothesis look
-  plausible. The hard reset never fixed anything; the code fix did. Lesson:
-  if a "display artifact" appears and survives reflash, audit the rendering
-  code first (pixel-sampling a photo of the screen is decisive — see that
-  post-mortem) before blaming panel state, brownouts or reset sequences.
 - **The panel displays INVERTED colors: displayed = ~written.** Verified against
   photos (write cyan 0x07FF → see red; write yellow 0xFFE0 → see blue).
   To display white, write `TFT_BLACK`; to display black, write `TFT_WHITE`.
@@ -157,7 +139,7 @@ All custom text on the CYD goes through LovyanGFX's **BFF** format (4bpp alpha, 
 ## SD card PNG pipeline (decode + composite + wiring)
 
 The weather app's dog outfits are 17 RGBA PNGs on the SD card root (selection chart in
-`README-WeatherApp.md`). The machinery below is what any CYD project blitting SD-card
+`README.md`). The machinery below is what any CYD project blitting SD-card
 PNGs needs (`src/dog_image.cpp`; verified pixel-exact by `test/test_decoder.py`):
 
 - **Decode pipeline** (`src/dog_image.cpp`): PNG chunk walk (IHDR/PLTE/IDAT/IEND)
@@ -201,7 +183,7 @@ PNGs needs (`src/dog_image.cpp`; verified pixel-exact by `test/test_decoder.py`)
 ## Theme picker swipe animation: LGFX gotchas
 
 All hit while building the weather app's theme-picker swipe animation
-(`animatePickerSwipe()`; feature description in `README-WeatherApp.md`):
+(`animatePickerSwipe()`; feature description in `README.md`):
 
 - **Blit each card independently.** On the final frame the old card is fully off-screen (`w == 0`); `if (A.w > 0 && B.w > 0)` around the two blits then also skips the new card and leaves a white box in the preview. Use two separate `if (w > 0)` guards.
 - **Final frame uses the exact travel distance** (`off = kTravel`), not the eased value — the easing undershoots by 1–2 px and the new card lands off the preview position, leaving a seam.

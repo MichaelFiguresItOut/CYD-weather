@@ -42,7 +42,7 @@ CODEPOINTS = list(range(32, 127)) + [0xB0, 0xB7]
 # em sizes covering the Sky theme's text sizes. 9/12 were added because the
 # the design's fractional sizes (10.5/12/11.5/9.5/9px) were being reproduced with
 # sub-1.0 BFF scaling, and LGFX's nearest-neighbor scaler DROPS 1px source
-# columns when downscaling (see README post-mortem) - thin strokes vanish and
+# columns when downscaling (see docs/CYD-HARDWARE.md post-mortem) - thin strokes vanish and
 # small text comes out garbled. Exact-size masters at scale 1.0 are always crisp.
 MASTERS = [9, 10, 12, 13, 20, 48]
 

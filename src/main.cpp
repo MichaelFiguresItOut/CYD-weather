@@ -3207,7 +3207,7 @@ static void handleTouch() {
 }
 
 // ---------------------------------------------------------------------------
-//  Display hard reset — see README "Display gotchas" (ST7789).
+//  Display hard reset — see docs/CYD-HARDWARE.md "Display gotchas" (ST7789).
 //  The ST7789 is a separate chip with its own volatile state: resetting the
 //  ESP32 (RST button / flashing) does NOT reset it, and LGFX's Panel_ST7789
 //  init list contains no SWRESET (0x01). Kept as defense against stale panel
