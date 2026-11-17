@@ -10,14 +10,21 @@ which documents the weather app itself.
   The old USB-A cable into a rear USB-A port enumerated as COM3 but gave flaky
   "port busy / access denied" errors; don't use it. A stale COM3 entry may
   linger in Device Manager (status Unknown) — ignore it.
-- **Opening COM4 resets the ESP32 (auto-reset circuit).** The CH340's DTR/RTS
-  lines are wired to auto-reset, so ANY ordinary port open — including a plain
-  pyserial log capture with no esptool download-mode sequence — toggles DTR
-  and resets the chip. Observed: blank screen then a NORMAL boot (DTR is not
-  observed to reach BOOT/GPIO0, so it does NOT enter download mode — cf. the
-  Flash procedure section below). Consequences: don't casually open the port
-  to peek at logs; deliberate boot logging goes through `test/capture_boot.py`
-  (its open+reset is intentional); otherwise inspect a serial log the user
+- **Resetting the chip from the PC — verified behavior (2026-11-27).** The
+  CH340's DTR/RTS lines are wired to the auto-reset circuit, but "any port
+  open resets the chip" is NOT true on this setup: a plain `serial.Serial()`
+  open left the chip running (two 9–12 s captures returned 0 bytes — a reset
+  would have produced the boot log). What reliably works is the sequence in
+  `test/capture_boot.py`: **DTR low, RTS high (hold ≥ 300 ms), then RTS low**
+  → clean NORMAL boot captured from t=0. The older variant (DTR high, RTS
+  high → RTS low) produced no boot at all — while DTR is high the chip appears
+  held in reset, so a tool that opens the port with DTR asserted could leave
+  the board frozen. Download mode is NOT reachable from the PC: DTR is not
+  observed to reach BOOT/GPIO0 (cf. Flash procedure below) — the manual
+  button dance is the only deterministic way in.
+  Consequences: don't casually open the port to peek at logs (it won't reset
+  the board, and a half-reset can freeze it); deliberate boot logging goes
+  through `test/capture_boot.py`; otherwise inspect a serial log the user
   captures.
 - 1.9" ST7789 TFT: native glass **240x320 portrait**, used as **320x240 landscape** (LGFX rotation 1 = rotation 3 flipped 180°)
 - GT911 capacitive touch
@@ -216,10 +223,9 @@ There is no shorter or longer variant; always do both, in this order:
 Why both every time: `upload_port = COM4` and
 `board_upload.before_reset = no-reset` are set in platformio.ini, so esptool
 does NOT put the chip into download mode itself. Plain `pio run -t upload`
-without step 1 is unreliable — it has sometimes connected (the DTR/RTS
-transitions when the port opens happened to reset the chip into download mode)
-and other times failed with "No serial data received" or "Wrong boot mode
-detected (0x13)". The button dance makes it deterministic.
+without step 1 is unreliable — it has sometimes connected and other times
+failed with "No serial data received" or "Wrong boot mode detected (0x13)".
+The button dance makes it deterministic.
 
 `test/enter_download_mode.py` was tried as a no-buttons alternative (2026-11-26):
 after its DTR/RTS sequence, `pio run -t upload` still failed with "No serial

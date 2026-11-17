@@ -126,7 +126,7 @@ Four themes (`THEME_COUNT` = 4), each with automatic day/night variants driven b
 
 - All renderers draw through one `struct T` transform (scale + offset): the live display uses `T::ID`, and the picker renders the previewed theme at half scale into a 160×120 window via `setClipRect()` – so previews are true scaled-down versions of what a selection will show. The picker's swipe animation bakes the same half-scale render into sprites – see the Theme picker section below.
 - Colors: all palettes store *displayed*-space colors pre-inverted (this panel inverts every pixel) — `C(r,g,b)` = ~rgb565(displayed). Per-theme palettes: `SkyPal`, `CardsPal`, `SplitPal`, `BentoPal` (day/night instances) plus per-row background gradients via `bgDisplayed()` / `bgCode()` and `drawThemeBg()`.
-- **Persistence**: the selected theme is saved to NVS (namespace `cydwx`, key `theme`) on selection (`saveTheme()`) and restored at boot before the first render (`loadTheme()` in `setup()`); both live in `src/config.cpp` and operate on `userSettings.theme`. On load, legacy/out-of-range indices are migrated one time (NVS key `themeVer` = 2 marks a migrated write): the removed CARDS theme (old index 2) falls back to BASIC (0); old SPLIT (3) → 2 and old BENTO (4) → 3.
+- **Persistence**: the selected theme is saved to NVS (namespace `cydwx`, key `theme`) on selection (`saveTheme()`) and restored at boot before the first render (`loadTheme()` in `setup()`); both live in `src/config.cpp` and operate on `userSettings.theme`. `saveTheme()` also records `themeVer=2` with every save, so the legacy migration (which runs when the stored `themeVer` < 2) can never re-fire on a freshly selected theme: the removed CARDS theme (old index 2) falls back to BASIC (0); old SPLIT (3) → 2 and old BENTO (4) → 3. **NVS gotcha (cost a full debugging session, fixed 2026-11-27):** `Preferences::begin(name, true)` means *read-only*, not "create if missing" — in read-only mode every `putUInt` is a silent no-op returning 0, and `putUInt`'s return value is bytes written (4) or 0 on failure, so `if (err)`-style checks read a failed write as success. The namespace is now opened read-write and every write's return value is checked; the theme had never actually persisted before that fix.
 - Per-second partial updates are theme-aware: BASIC repaints only its clock/date bands; SKY clears + redraws the status/clock/date band (including sky decorations); SPLIT clears + redraws only the left-zone clock/date band [10..214]×[22..78) via `drawSplitClockDate()`; BENTO clears + redraws only the clock card (8,8,304,52) via `drawBentoClockCard()` — the card's own background is part of the redraw, so the clock tick never needs a full re-render (no flicker, no flash).
 - **Theme 2 (SPLIT) FEELS chip "second F" (seen on glass, 2026-11-15).** `buildTempStr()` = `"%.1f %s"` — the unit char is **already appended** to temp strings (`"32.7 F"`, `"--.-"` when invalid). The SPLIT FEELS chip then appended `tempUnitChar()` a second time, drawing `"32.7 FF"` on glass. Every other theme draws the `tempOrDash()`/`buildTempStr()` result as-is. Rule: never append `tempUnitChar()` to a string produced by those helpers. Note the app-wide convention is value + space + unit char (no degree sign), so glass shows `32.7 F` where the design says `32.7°F` — intentional, and the host previews mirror the firmware string (`"32.7 F"`). The one exception is theme 3 (BENTO)'s TODAY H-L row, which appends `\xB0` (°) on purpose because the BENTO design specifies degree signs — `°` is in the BFF cmap (verified present before use).
 
@@ -280,11 +280,15 @@ There is no shorter or longer variant; always do both, in this order:
 2. In the project root: `pio run -t upload`
 
 ## Serial console
-COM4 @ 115200. **Opening the port resets the ESP32** (CH340 auto-reset circuit
-— `docs/CYD-HARDWARE.md`, Board section): use `test/capture_boot.py` for boot
-logging rather than peeking at the port.
+COM4 @ 115200. **Boot logging goes through `test/capture_boot.py`** — it runs
+the CH340 auto-reset sequence that reliably re-boots the chip and captures the
+log from t=0 (a plain port open does NOT reliably reset this board, verified
+2026-11-27 — `docs/CYD-HARDWARE.md`, Board section).
 - Boot: `[FONT] nunito bff: ok|FAILED - using bitmap fallback` reports the
   theme-1 font load (details in "Nunito BFF fonts", `docs/CYD-HARDWARE.md`).
+- Boot also logs `[THEME] NVS: stored theme=.. ver=..` (what was read from NVS,
+  ` (migrated)` if the legacy numbering migration ran) and `[THEME] active: NAME (n)`
+  (the theme actually in use after migration/clamping).
 - Each refresh starts with `[WX] rssi=.. freeHeap=..`; each fetch logs
   `[WX] ... day=0|1|? rain=... next=...`.
 - NBM and METAR log their own `[NBM]` / `[METAR]` lines (freeHeap at request
