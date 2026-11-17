@@ -249,3 +249,16 @@ There is no shorter or longer variant; always do both, in this order:
    Screen freezes/goes blank — normal; the ROM bootloader waits for data
    indefinitely, so there is no rush between steps 1 and 2.
 2. In the project root: `pio run -t upload`
+
+## Serial console
+COM4 @ 115200. **Opening the port resets the ESP32** (CH340 auto-reset circuit
+— `docs/CYD-HARDWARE.md`, Board section): use `test/capture_boot.py` for boot
+logging rather than peeking at the port.
+- Boot: `[FONT] nunito bff: ok|FAILED - using bitmap fallback` reports the
+  theme-1 font load (details in "Nunito BFF fonts", `docs/CYD-HARDWARE.md`).
+- Each refresh starts with `[WX] rssi=.. freeHeap=..`; each fetch logs
+  `[WX] ... day=0|1|? rain=... next=...`.
+- NBM and METAR log their own `[NBM]` / `[METAR]` lines (freeHeap at request
+  time, `DNS failed`, HTTP code) — an explicit `DNS failed` distinguishes DNS
+  from TCP/TLS when a fetch returns -1.
+- Boot-time `[SD]` / `[DOG]` lines: see the Dog outfit images section.

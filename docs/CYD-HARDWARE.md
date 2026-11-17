@@ -10,6 +10,15 @@ which documents the weather app itself.
   The old USB-A cable into a rear USB-A port enumerated as COM3 but gave flaky
   "port busy / access denied" errors; don't use it. A stale COM3 entry may
   linger in Device Manager (status Unknown) — ignore it.
+- **Opening COM4 resets the ESP32 (auto-reset circuit).** The CH340's DTR/RTS
+  lines are wired to auto-reset, so ANY ordinary port open — including a plain
+  pyserial log capture with no esptool download-mode sequence — toggles DTR
+  and resets the chip. Observed: blank screen then a NORMAL boot (DTR is not
+  observed to reach BOOT/GPIO0, so it does NOT enter download mode — cf. the
+  Flash procedure section below). Consequences: don't casually open the port
+  to peek at logs; deliberate boot logging goes through `test/capture_boot.py`
+  (its open+reset is intentional); otherwise inspect a serial log the user
+  captures.
 - 1.9" ST7789 TFT: native glass **240x320 portrait**, used as **320x240 landscape** (LGFX rotation 1 = rotation 3 flipped 180°)
 - GT911 capacitive touch
 
