@@ -227,7 +227,7 @@ current weather. One of 17 RGBA PNGs on the SD card root is selected by
 | **Dog outfit image bottom-right** | `drawDogImage()` composites the loaded outfit row-by-row against the current background and blits it (`src/dog_image.cpp`); selection in `selectDogImage()`, reloads via `refreshDogImage()`; drawn once per full render, never touched by partial updates. See Dog outfit images section |
 | "touch: refresh" bottom hint | static label only – actual behavior per the Touch targets section below |
 
-### Touch targets (tap = touch release; 2 s debounce between actions)
+### Touch targets (action fires on touch-down; per-action debounce: 300 ms zone taps, 2 s refresh)
 Generous fixed rectangles in landscape canvas coords (320x240), checked in this order in `handleTouch()`:
 
 | Tap target | Zone | Action |
@@ -238,6 +238,7 @@ Generous fixed rectangles in landscape canvas coords (320x240), checked in this 
 | Temperature band | x < width−96, y ∈ [92,138) | toggles all displayed temperatures (current / feels-like / today H-L) between °F and °C – `useCelsius`. wx values stay in °F internally; conversion happens at draw time only (`tempForDisplay()`) |
 | Anywhere else | — | immediate weather refetch + full render (original behavior) |
 
+- Per-action debounce: zone taps (dog/clock/date/temp) are debounced 300 ms (double-tap protection — a tighter window would just toggle the value back); a manual refresh tap is debounced 2 s (the fetch is blocking, so this only guards the tail after a fast fetch completes — it prevents back-to-back manual fetches on a fast network). Both clocks are independent: a toggle does not delay a refresh and vice versa.
 - Toggles are runtime state only (`use24Hour`, `dateFormat`, `useCelsius`); not persisted across reboot.
 - Each toggle does a full `renderScreen()`; the per-second partial updates share the same format helpers (`formatClock()`, `formatDateLine()`) and `drawClockAndDate()` keeps `lastClockBuf/lastDateBuf` in sync, so no ghosting or redundant repaints after a toggle.
 - While the THEME picker is up, `loop()` suppresses all main-display redraws (status changes, periodic refresh render, per-second partial updates) so it isn't clobbered; data fetching and dog-image reload still run normally. Picker gestures are evaluated on finger lift (`SwipeState` in `handleTouch()`): horizontal movement > 24 px (and more than twice the vertical) = **swipe** → next/previous theme (wraps around); a short (< 600 ms), small-movement press = **tap** → selects the previewed theme, saves it to NVS and returns to the main display. Ambiguous gestures are ignored.

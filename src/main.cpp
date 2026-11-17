@@ -3040,7 +3040,7 @@ static void updateDynamicTexts() {
 }
 
 // ---------------------------------------------------------------------------
-//  Touch targets (2 s debounce between actions)
+//  Touch targets (per-action debounce: 300 ms zone taps, 2 s refresh)
 //
 //  Generous hit rectangles. Checked in this order (BASIC layout values shown):
 //    dog corner zone  x >= width-96, y >= height-128   -> THEME picker;
@@ -3146,11 +3146,24 @@ static void handleTouch() {
   }
 
   if (n == 0) return;
-  static uint32_t lastAction = 0;
-  if (millis() - lastAction < 2000) return;   // debounce
-  lastAction = millis();
-
   int x = pts[0].x, y = pts[0].y;
+
+  // Per-action debounce (the action fires on touch-down): zone taps get
+  // 300 ms — just double-tap protection; a manual refresh keeps 2 s so a
+  // fast network can't be spammed with back-to-back fetches (the fetch
+  // itself is blocking, so the 2 s only guards the tail after it completes).
+  static uint32_t lastToggle = 0;   // dog / clock / date / temp zone taps
+  static uint32_t lastRefresh = 0;  // manual weather refresh
+  bool refreshTap = !inDogZone(x, y) && !inClockZone(x, y) &&
+                    !inDateZone(x, y) && !inTempZone(x, y);
+  if (refreshTap) {
+    if (millis() - lastRefresh < 2000) return;   // debounce
+    lastRefresh = millis();
+  } else {
+    if (millis() - lastToggle < 300) return;     // debounce
+    lastToggle = millis();
+  }
+
   Serial.printf("[TOUCH] (%d,%d)\n", x, y);
 
   if (inDogZone(x, y)) {                // dog corner zone -> THEME picker
