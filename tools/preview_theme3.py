@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the SPLIT theme (index 2 in the 4-theme numbering; mockup3) day + night previews that mirror src/main.cpp.
+"""Render the SPLIT theme (index 2 in the 4-theme numbering) day + night previews that mirror src/main.cpp.
 
 Reuses the verified BFF parser from tools/preview_theme1.py and adds a
 draw_scaled() that replicates LGFX's BFFfont::drawChar fixed-point math
@@ -17,7 +17,7 @@ exactly (see lgfx_fonts.cpp):
 
 Layout mirrors renderTheme2(): left solid data zone [0,214), right sky panel
 x>=214 with vertical gradient (#7cc0ec->#b5dcf6 day / #1c3f74->#0e2549 night);
-flat sun or crescent moon + stars; two stationary mockup-style panel clouds;
+flat sun or crescent moon + stars; two stationary panel clouds;
 DAY/NIGHT label (white/gold) + ground ellipse under the dog; status row,
 left-aligned clock/date, temp+unit with aligned baselines, description with
 mini cloud icon, FEELS chip with crossed-arrows icon, RAIN chip with umbrella
@@ -101,7 +101,7 @@ class Font:
     def width(self, s):   # bffWidth: unscaled advance sum
         return self.f.width(s)
 
-    def fit(self, s, avail, cap=None):   # bffFit + optional mockup size cap
+    def fit(self, s, avail, cap=None):   # bffFit + optional design size cap
         w = self.width(s)
         sc = (avail / w) if (w > avail and w > 0) else 1.0
         if cap is not None:
@@ -271,7 +271,7 @@ def render(mode):
     dsc = F12.fit(DESC, SPLIT_X - 32)
     F12.draw(img, DESC, 32, 128, dsc, p["desc_txt"])
 
-    # FEELS chip [12,146,213,32] (mockup content-box: 190+20 pad+border -> 12..225)
+    # FEELS chip [12,146,213,32] (design content-box: 190+20 pad+border -> 12..225)
     d.rounded_rectangle([12, 146, 224, 177], radius=9, fill=p["f_bg"], outline=p["f_bd"])
     draw_feels_icon(img, 24, 146 + (32 - 14) // 2, p["f_icon"])
     F9.draw(img, "FEELS LIKE", 46, 146 + (32 - 9) // 2, 1.0, p["f_lbl"])

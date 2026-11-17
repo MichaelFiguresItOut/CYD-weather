@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Render the BENTO theme (index 3 in the 4-theme numbering; mockup4) day + night previews that mirror src/main.cpp.
+"""Render the BENTO theme (index 3 in the 4-theme numbering) day + night previews that mirror src/main.cpp.
 
 Mirrors renderTheme3Nunito() (and drawBentoClockCard / drawBentoDogCard) line
-for line: card rectangles, Nunito BFF text at the mockup sizes, accent bar,
+for line: card rectangles, Nunito BFF text at the design sizes, accent bar,
 FEELS chip with crossed-arrows icon, rain card with umbrella/dot, detail rows
 and the centered dog. Colors are passed through RGB565 exactly like the
 firmware's C() macro so the preview matches the panel.
@@ -71,7 +71,7 @@ PAL = {
     ),
 }
 
-# Sample data: the mockup's own strings (worst-case widths checked against avail).
+# Sample data: the design's own strings (worst-case widths checked against avail).
 STATUS = "WIFI NTP"
 CLOCK = "1:03 AM"
 DATE = "Saturday 14 November 2026"

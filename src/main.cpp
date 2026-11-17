@@ -1194,8 +1194,7 @@ static Layout gLayout;   // defaults above = current layout
 // ---------------------------------------------------------------------------
 //  Theme system
 //
-//  Four display themes (each with day and night variants) following the HTML
-//  mockups in /mockups:
+//  Four display themes (each with day and night variants):
 //    0 BASIC - original layout (gLayout coordinates, white/grey background)
 //    1 SKY   - full-screen sky gradient, sun/moon + clouds/stars
 //    2 SPLIT - data zone left, sky "stage" panel right of the dog
@@ -1248,7 +1247,7 @@ struct T {
 const T T::ID = {1.0f, 1.0f, 0, 0};
 
 // ---- Colors -------------------------------------------------------------------
-// The mockups specify DISPLAYED colors; this panel inverts every pixel, so all
+// Colors are specified in DISPLAYED space; this panel inverts every pixel, so all
 // palette values are stored pre-inverted: C(r,g,b) = ~rgb565(displayed).
 static uint16_t D(uint8_t r, uint8_t g, uint8_t b) {
   return tft.color24to16(((uint32_t)r << 16) | ((uint32_t)g << 8) | b);   // displayed space
@@ -1264,14 +1263,14 @@ struct SkyPal {
   uint16_t fBg, fBd, fLbl, fVal;     // feels chip
   uint16_t rBg, rBd, rTxt, rDot;     // rain chip
 };
-static const SkyPal skyDay = {   // mockup1-sky-day.html (dark text on light sky)
+static const SkyPal skyDay = {   // dark text on light sky
   C(0x16,0x32,0x5c), C(0x3d,0x6a,0x9e), C(0x16,0x32,0x5c), C(0x3d,0x5f,0x8f),
   C(0x40,0x58,0x7a), C(0x5b,0x7a,0x9e), C(0x7d,0x92,0xad),
   C(0x2b,0x6c,0xb0), C(0x2f,0x9e,0x6b), C(0xc7,0x7e,0x14),
   C(0xdf,0xf0,0xff), C(0x8f,0xc3,0xf2), C(0x2b,0x6c,0xb0), C(0x1d,0x4f,0x8c),
   C(0xe9,0xf8,0xef), C(0x7c,0xcf,0x9f), C(0x23,0x7a,0x52), C(0xff,0xc8,0x57)
 };
-static const SkyPal skyNight = {   // mockup1-sky-night.html
+static const SkyPal skyNight = {
   C(0xff,0xff,0xff), C(0x9f,0xc3,0xe8), C(0xff,0xff,0xff), C(0xcf,0xe3,0xff),
   C(0xd7,0xe3,0xf4), C(0x8a,0xa3,0xc0), C(0x6f,0x87,0xa8),
   C(0x6f,0xb3,0xff), C(0x3e,0xcf,0x8e), C(0xff,0xc8,0x57),
@@ -1289,7 +1288,7 @@ struct SplitPal {
   uint16_t rBg, rBd, rTxt, rDot;      // RAIN chip (rDot = umbrella icon)
   uint16_t row1C, hint;
 };
-// Mockup3 colors (pre-inverted), taken from mockups/mockup3-split-{day,night}.html.
+// SPLIT colors (pre-inverted).
 static const SplitPal splitDay = {
   C(0xff,0xff,0xff),
   C(0xff,0xff,0xff), C(0x6f,0xb1,0xe2),
@@ -1323,7 +1322,7 @@ struct BentoPal {
   uint16_t detC, updC;                // detail rows / updated row
   uint16_t dogCardBg, capC;           // dog card + caption
 };
-// Colors match mockups/mockup4-bento-day|night.html exactly (class names noted).
+// BENTO colors (design class names noted).
 static const BentoPal bentoDay = {
   C(0xff,0xff,0xff), C(0xd7,0xe3,0xf4),            // .card bg / border
   C(0x16,0x32,0x5c), C(0x4a,0x6f,0xa5),            // .time / .date
@@ -1482,7 +1481,7 @@ static void thickLine(const T& t, int x0f, int y0f, int x1f, int y1f, float wFul
   }
 }
 
-// Flat sun (mockup1): pale halo disc + core + 8 short rays at the rim.
+// Flat sun (SKY): pale halo disc + core + 8 short rays at the rim.
 static void drawSun(const T& t, int cx, int cy, uint16_t halo, uint16_t core, uint16_t ray) {
   float s = t.sx;
   int X = t.X(cx), Y = t.Y(cy);
@@ -1496,7 +1495,7 @@ static void drawSun(const T& t, int cx, int cy, uint16_t halo, uint16_t core, ui
   gT->fillCircle(X, Y, (int)(11.5f * s + 0.5f), core);
 }
 
-// Mockup3 flat sun: core r6 + short rays, no halo (18px icon in the panel).
+// SPLIT flat sun: core r6 + short rays, no halo (18px icon in the panel).
 static void drawFlatSun(const T& t, int cx, int cy) {
   float s = t.sx;
   int X = t.X(cx), Y = t.Y(cy);
@@ -1510,7 +1509,7 @@ static void drawFlatSun(const T& t, int cx, int cy) {
   gT->fillCircle(X, Y, (int)(6 * s + 0.5f), core);
 }
 
-// Mockup3 panel cloud (stationary): rounded bar with two bumps above it.
+// SPLIT panel cloud (stationary): rounded bar with two bumps above it.
 static void drawSplitCloud(const T& t, int x, int y, bool small, uint16_t c) {
   float s = t.sx;
   if (!small) {   // pc1: 52x13 bar; bumps r9 @(+18,-7), r6 @(+33,+2)
@@ -1533,7 +1532,7 @@ static uint16_t blendWhite(uint16_t c, int pct) {
   return D(mix(r, 31), mix(g, 63), mix(b, 31));
 }
 
-// Mockup3 description cloud icon (~14px): three bumps over a flat bottom.
+// SPLIT description cloud icon (~14px): three bumps over a flat bottom.
 static void drawMiniCloud(const T& t, int x, int y, uint16_t c) {
   float s = t.sx;
   gT->fillCircle(t.X(x + 4), t.Y(y + 7), max(1, (int)(3 * s + 0.5f)), c);
@@ -1553,13 +1552,13 @@ static void drawCloud(const T& t, int x, int y, float k, uint16_t c) {
   gT->fillCircle(X + (int)(42 * s), Y + (int)(2 * s), max(1, (int)(8 * s + 0.5f)), c);
 }
 
-// Tiny star dot (mockup .star).
+// Tiny star dot (design .star).
 static void drawStar(const T& t, int x, int y, uint16_t c) {
   int d = max(1, (int)(2 * t.sx));
   gT->fillRect(t.X(x), t.Y(y), d, d, c);
 }
 
-// Small umbrella (mockup1 rain chip): half-disc canopy + straight shaft.
+// Small umbrella (SKY rain chip): half-disc canopy + straight shaft.
 // bgC flattens the lower half of the canopy circle; only used where the icon
 // sits on a solid chip background. k scales the whole shape (~13px tall at 1).
 static void drawUmbrella(const T& t, int cx, int cy, float k, uint16_t c, uint16_t bgC) {
@@ -1573,7 +1572,7 @@ static void drawUmbrella(const T& t, int cx, int cy, float k, uint16_t c, uint16
   gT->fillRect(X - sw / 2, cyC + 1, sw, (int)(7.5f * s), c);
 }
 
-// Tiny sun / crescent for the status-row DAY/NIGHT label (mockup1 st-r icon).
+// Tiny sun / crescent for the status-row DAY/NIGHT label (SKY st-r icon).
 // biteC: color cut out of the crescent (the surface the icon sits on).
 static void drawDnIcon(const T& t, int cx, int cy, uint16_t c, uint16_t biteC) {
   float s = t.sx;
@@ -1620,7 +1619,7 @@ static void drawStatusRow(const T& t, int xL, int yFull, float s, uint16_t cL, u
     gT->setTextSize(s * t.sx);
     gT->setTextColor(cR);
     gT->drawString(right, t.X(xREnd - rw), t.Y(yFull));
-    if (dnIcon) {   // small sun/moon left of the label (mockup1)
+    if (dnIcon) {   // small sun/moon left of the label (SKY)
       int icx = xREnd - rw - (int)(9 * s);
       drawDnIcon(t, icx, yFull + 4 * s, cR, bgCode(1, icx, yFull + 4 * s));
     }
@@ -2020,7 +2019,7 @@ static void drawSkyDecor(int idx, const T& t) {
     }
   } else if (idx == THEME_SPLIT) {   // SPLIT: flat sun/moon + panel clouds on the right
     if (!nightMode()) {
-      drawFlatSun(t, 267, 23);                       // mockup skyicon: top:14, 18px
+      drawFlatSun(t, 267, 23);                       // design skyicon: top:14, 18px
       drawSplitCloud(t, 238, 64, false, C(0xff,0xff,0xff));
       drawSplitCloud(t, 270, 86, true, blendWhite(bgCode(THEME_SPLIT, 290, 88), 75));   // pc2 @ .75 opacity
     } else {
@@ -2182,7 +2181,7 @@ static void renderTheme1Legacy(const T& t) {   // SKY - original bitmap-font lay
   drawDogImage(t, 1);
 }
 
-static void renderTheme1(const T& t) {   // SKY (mockup1) - Nunito BFF fonts
+static void renderTheme1(const T& t) {   // SKY - Nunito BFF fonts
   if (!nunitoOK) { renderTheme1Legacy(t); return; }
   const SkyPal& p = SKY();
   drawThemeBg(1, t);
@@ -2249,11 +2248,11 @@ static void renderTheme1(const T& t) {   // SKY (mockup1) - Nunito BFF fonts
 // Theme-2 dynamic band (clock + date), full-space coords. Shared by the full
 // render and updateDynamicTexts() so they never drift apart; the per-second path
 // clears only this band -> no full-screen flash like theme 1 (SKY).
-static float splitClockScale(const char* s) {   // mockup: font-size 37px -> em48 @ 37/48
+static float splitClockScale(const char* s) {   // design: font-size 37px -> em48 @ 37/48
   float sc = bffFit(nunitoF48, s, 198);
   return (sc < 37.0f / 48.0f) ? sc : 37.0f / 48.0f;
 }
-// Mockup date is 10.5px: rendered with the em10 master at scale 1.0 (10px).
+// Design date is 10.5px: rendered with the em10 master at scale 1.0 (10px).
 // Deliberately NOT em13@0.81 - any sub-1.0 BFF scale runs LGFX's nearest-
 // neighbor scaler, which drops 1px source columns and garbles thin strokes.
 static float splitDateScale(const char* s) {
@@ -2276,7 +2275,7 @@ static void drawSplitClockDate(const T& t) {
   bffText(t, nunitoF10, dateBuf, 13, 64, p.date, splitDateScale(dateBuf), p.left);
 }
 
-static void renderTheme2(const T& t) {   // SPLIT (mockup3)
+static void renderTheme2(const T& t) {   // SPLIT
   const SplitPal& p = SPLIT();
   drawThemeBg(THEME_SPLIT, t);
   drawSkyDecor(THEME_SPLIT, t);
@@ -2306,7 +2305,7 @@ static void renderTheme2(const T& t) {   // SPLIT (mockup3)
     gT->drawString(desc, t.X(36), t.Y(128));
 
     char feels[16]; tempOrDash(feels, sizeof(feels), wx.valid, wx.feelsLike);
-    // Chips span 12..225 (mockup .tile is content-box: 190 + 20 padding + border),
+    // Chips span 12..225 (design .tile is content-box: 190 + 20 padding + border),
     // so they extend ~10px past the 214 panel line.
     drawFeelsChip(t, 12, 146, 213, 32, p.fBg, p.fBd, 1.1f, p.fLbl, feels, 2.2f, p.fVal);
 
@@ -2325,7 +2324,7 @@ static void renderTheme2(const T& t) {   // SPLIT (mockup3)
     return;
   }
 
-  // Status row: green dot (5px) + "WIFI NTP" (em10 @10px; mockup 9.5px).
+  // Status row: green dot (5px) + "WIFI NTP" (em10 @10px; design 9.5px).
   char status[24]; buildWifiStatus(status, sizeof(status));
   int dr = max(1, (int)(2 * t.sx + 0.5f));
   gT->fillCircle(t.X(12) + dr, t.Y(9 + 5), dr, p.dot);
@@ -2342,13 +2341,13 @@ static void renderTheme2(const T& t) {   // SPLIT (mockup3)
   bffText(t, nunitoF20, tempUnitChar(), 12 + tw + 6,
           (int)(80 + nunitoF48.ascent * ts - nunitoF20.ascent * 0.95f), p.unit, 0.95f, p.left);
 
-  // Description row: cloud icon (14px) + text (em12 @12px = mockup size), mockup left:13 top:128.
+  // Description row: cloud icon (14px) + text (em12 @12px = design size), design left:13 top:128.
   const char* desc = wx.valid ? wx.description.c_str() : "No weather data";
   drawMiniCloud(t, 13, 129, p.descTxt);
   float dsc = bffFit(nunitoF12, desc, 214 - 32);
   bffText(t, nunitoF12, desc, 32, 128, p.descTxt, dsc, p.left);
 
-  // FEELS chip: mockup .tile{left:12;width:190px;padding:0 10px;border:1.5px} is
+  // FEELS chip: design .tile{left:12;width:190px;padding:0 10px;border:1.5px} is
   // content-box -> outer box 12..225 (213 wide), so the 214 panel line runs ~10px
   // BEHIND the chip's right edge (chip is painted after the bg, covering the line).
   // Icon @x=24 (12+1.5+10=23.5), label @x=46 (icon box 14 + gap 8), value
@@ -2372,15 +2371,15 @@ static void renderTheme2(const T& t) {   // SPLIT (mockup3)
   char rain[48]; buildRainLine(rain, sizeof(rain));
   gT->fillRoundRect(t.X(12), t.Y(184), max(2, t.W(213)), max(2, t.H(27)), (int)(8 * t.sx + 0.5f), p.rBg);
   gT->drawRoundRect(t.X(12), t.Y(184), max(1, t.W(213) - 1), max(1, t.H(27) - 1), (int)(7 * t.sx + 0.5f), p.rBd);
-  // em12 @1.0 (mockup 11.5px): sub-1.0 BFF scaling decimates 1px strokes.
+  // em12 @1.0 (design 11.5px): sub-1.0 BFF scaling decimates 1px strokes.
   float rsc = bffFit(nunitoF12, rain, 213 - 40);
   int rw = (int)(bffWidth(nunitoF12, rain) * rsc + 0.5f);
   int gx = 12 + (213 - (13 + 6 + rw)) / 2;     // group: umbrella(13px) + gap(6px) + text
   drawUmbrella(t, gx + 6, 184 + 13, 1.0f, p.rDot, p.rBg);
   bffText(t, nunitoF12, rain, gx + 19, 184 + (27 - (int)(12 * rsc)) / 2, p.rTxt, rsc, p.rBg);
 
-  // row1 (mockup top:217 width:190): left text @x=12; UPD right-aligned at x=202.
-  // em9 @1.0 = mockup's 9px (em10@0.85 decimated and garbled thin strokes).
+  // row1 (design top:217 width:190): left text @x=12; UPD right-aligned at x=202.
+  // em9 @1.0 = design's 9px (em10@0.85 decimated and garbled thin strokes).
   char left[48], right[24];
   if (wx.valid) snprintf(left, sizeof(left), "HUM %d%% \xB7 H %.1f\xB0 L %.1f\xB0",
                          wx.humidity, tempForDisplay(wx.tMax), tempForDisplay(wx.tMin));
@@ -2396,7 +2395,7 @@ static void renderTheme2(const T& t) {   // SPLIT (mockup3)
 }
 
 // ---------------------------------------------------------------------------
-//  Theme 3 - BENTO (mockup4).
+//  Theme 3 - BENTO.
 //
 //  The clock card is its own function: updateDynamicTexts() repaints just that
 //  card once per minute instead of re-rendering the whole screen every second
@@ -2413,7 +2412,7 @@ static void drawBentoClockCard(const T& t) {
   buildClockDateStrings(clockBuf, sizeof(clockBuf), dateBuf, sizeof(dateBuf));
 
   if (nunitoOK) {
-    // Status row (mockup y=25): dot 5px + "WIFI NTP" (em9); sun/moon +
+    // Status row (design y=25): dot 5px + "WIFI NTP" (em9); sun/moon +
     // DAY/NIGHT right-aligned to x=304
     char wifi[24]; buildWifiStatus(wifi, sizeof(wifi));
     gT->fillCircle(t.X(18), t.Y(27), max(1, (int)(2.5f * t.sx + 0.5f)), p.dot);
@@ -2423,7 +2422,7 @@ static void drawBentoClockCard(const T& t) {
     bffText(t, nunitoF9, dn, 304 - dw, 25, p.stR, 1.0f, p.cardBg);
     drawDnIcon(t, 304 - dw - 9, 29, p.stR, p.cardBg);
 
-    // Clock (em48 at the mockup's 27px) and date (em10, mockup ~9.5px)
+    // Clock (em48 at the design's 27px) and date (em10, design ~9.5px)
     float cs = bffFit(nunitoF48, clockBuf, 290);
     if (cs > 27.0f / 48.0f) cs = 27.0f / 48.0f;
     bffCenter(t, nunitoF48, clockBuf, 160, 11, p.clock, cs, p.cardBg);
@@ -2456,7 +2455,7 @@ static void drawBentoClockCard(const T& t) {
 static void drawBentoDogCard(const T& t) {
   const BentoPal& p = BENTO();
   drawCard(t, 206, 66, 106, 166, p.dogCardBg, p.cardBd);
-  if (nunitoOK) {   // "OUTFIT · BAND" (mockup); plain band label if it does not fit
+  if (nunitoOK) {   // "OUTFIT · BAND" (design); plain band label if it does not fit
     char cap[32];
     snprintf(cap, sizeof(cap), "OUTFIT \xB7 %s", dogBandLabel());
     if (bffWidth(nunitoF9, cap) > 96) snprintf(cap, sizeof(cap), "%s", dogBandLabel());
@@ -2483,7 +2482,7 @@ static void renderTheme3Legacy(const T& t) {
   drawCard(t, 8, 184, 192, 48, p.cardBg, p.cardBd);  // detail card
   drawBentoDogCard(t);                          // dog card
   gT->fillRoundRect(t.X(7), t.Y(74), max(1, t.W(4)), max(1, t.H(56)),
-                    (int)(2 * t.sx + 0.5f), p.accent);   // bar on temp card (mockup .accent)
+                    (int)(2 * t.sx + 0.5f), p.accent);   // bar on temp card (design .accent)
 
   char tmp[16]; tempNumOnly(tmp, sizeof(tmp), wx.valid, wx.temp);
   gT->setTextSize(2.0f); int uw = gT->textWidth(tempUnitChar());
@@ -2531,7 +2530,7 @@ static void renderTheme3Legacy(const T& t) {
   gT->drawString(updl.c_str(), t.X(22), t.Y(221));
 }
 
-// BENTO with the Nunito BFF front (the SKY theme's font): mockup typography -
+// BENTO with the Nunito BFF front (the SKY theme's font): design typography -
 // 27px clock, ~9.5px date, 34px temp value, em9/em10/em12/em13/em20 for the rest.
 static void renderTheme3Nunito(const T& t) {
   const BentoPal& p = BENTO();
@@ -2539,21 +2538,21 @@ static void renderTheme3Nunito(const T& t) {
 
   drawBentoClockCard(t);                        // clock card
 
-  // ---- Temp card (mockup 192x72): accent bar + 34px number + FEELS chip ----
+  // ---- Temp card (design 192x72): accent bar + 34px number + FEELS chip ----
   drawCard(t, 8, 66, 192, 72, p.cardBg, p.cardBd);
   gT->fillRoundRect(t.X(7), t.Y(74), max(1, t.W(4)), max(1, t.H(56)),
-                    (int)(2 * t.sx + 0.5f), p.accent);   // mockup .accent
+                    (int)(2 * t.sx + 0.5f), p.accent);   // design .accent
   char tmp[16]; tempNumOnly(tmp, sizeof(tmp), wx.valid, wx.temp);
   float ts = bffFit(nunitoF48, tmp, 140);
-  if (ts > 34.0f / 48.0f) ts = 34.0f / 48.0f;              // mockup .tempv = 34px
+  if (ts > 34.0f / 48.0f) ts = 34.0f / 48.0f;              // design .tempv = 34px
   bffText(t, nunitoF48, tmp, 24, 74, p.temp, ts, p.cardBg);
-  float us = 15.0f / 20.0f;                                // mockup .tempu = 15px
+  float us = 15.0f / 20.0f;                                // design .tempu = 15px
   int t48w = (int)(bffWidth(nunitoF48, tmp) * ts + 0.5f);
   bffText(t, nunitoF20, tempUnitChar(), 24 + t48w + 6,
           (int)(74 + nunitoF48.ascent * ts - nunitoF20.ascent * us),
           p.unit, us, p.cardBg);
 
-  // FEELS chip (mockup 60x40 at (132,74), r10): crossed-arrows icon (9px) +
+  // FEELS chip (design 60x40 at (132,74), r10): crossed-arrows icon (9px) +
   // "FEELS" (em9) over the value (em20 @ 14px).
   gT->fillRoundRect(t.X(132), t.Y(74), max(2, t.W(60)), max(2, t.H(40)),
                     (int)(10 * t.sx + 0.5f), p.chipBg);
@@ -2567,15 +2566,15 @@ static void renderTheme3Nunito(const T& t) {
   bffText(t, nunitoF9, "FEELS", ix + 9 + 3, 81, p.chipLbl, 1.0f, p.chipBg);
   char feels[16]; tempOrDash(feels, sizeof(feels), wx.valid, wx.feelsLike);
   float fvs = bffFit(nunitoF20, feels, 44);
-  if (fvs > 14.0f / 20.0f) fvs = 14.0f / 20.0f;            // mockup .fval = 14px
+  if (fvs > 14.0f / 20.0f) fvs = 14.0f / 20.0f;            // design .fval = 14px
   bffCenter(t, nunitoF20, feels, 162, 95, p.chipVal, fvs, p.chipBg);
 
-  // Description row inside the temp card (mockup y=112): cloud + em12 text
+  // Description row inside the temp card (design y=112): cloud + em12 text
   const char* desc = wx.valid ? wx.description.c_str() : "No weather data";
   drawMiniCloud(t, 25, 113, p.descTxt);
   bffText(t, nunitoF12, desc, 42, 112, p.descTxt, bffFit(nunitoF12, desc, 154), p.cardBg);
 
-  // ---- Rain card (mockup 192x34, r10): dot/umbrella + em13 text, centered group ----
+  // ---- Rain card (design 192x34, r10): dot/umbrella + em13 text, centered group ----
   gT->fillRoundRect(t.X(8), t.Y(144), t.W(192), t.H(34), (int)(10 * t.sx + 0.5f), p.rBg);
   gT->drawRoundRect(t.X(8), t.Y(144), max(1, t.W(191)), max(1, t.H(33)),
                     (int)(9 * t.sx + 0.5f), p.rBd);
@@ -2584,18 +2583,18 @@ static void renderTheme3Nunito(const T& t) {
   int rw = (int)(bffWidth(nunitoF13, rain) * rsc + 0.5f);
   bool wet = wx.rainingNow || (wx.rainNearby && wx.nearbyStns[0]) || wx.nextRain[0];
   int iw = wet ? 13 : 6;
-  int gx = 8 + (192 - (iw + 7 + rw)) / 2;                  // mockup gap: 7px
+  int gx = 8 + (192 - (iw + 7 + rw)) / 2;                  // design gap: 7px
   if (wet) drawUmbrella(t, gx + 6, 163, 1.0f, p.rDot, p.rBg);
   else gT->fillCircle(t.X(gx + 3), t.Y(161), max(1, (int)(3 * t.sx + 0.5f)), p.rDot);
   bffText(t, nunitoF13, rain, gx + iw + 7, 154, p.rTxt, rsc, p.rBg);
 
-  // ---- Detail card rows (mockup: x=22, y=194/207/221) ----
+  // ---- Detail card rows (design: x=22, y=194/207/221) ----
   drawCard(t, 8, 184, 192, 48, p.cardBg, p.cardBd);
   char d1[32], d2[32];
   snprintf(d1, sizeof(d1), wx.valid ? "HUMIDITY %d%%" : "HUMIDITY --", wx.humidity);
   bffText(t, nunitoF10, d1, 22, 194, p.detC, 1.0f, p.cardBg);
   if (wx.valid)
-    snprintf(d2, sizeof(d2), "TODAY H %.1f\xB0 L %.1f\xB0",   // mockup: "TODAY H 43.7° L 34.5°"
+    snprintf(d2, sizeof(d2), "TODAY H %.1f\xB0 L %.1f\xB0",   // design: "TODAY H 43.7° L 34.5°"
              tempForDisplay(wx.tMax), tempForDisplay(wx.tMin));
   else
     snprintf(d2, sizeof(d2), "NO WEATHER DATA");
@@ -2642,7 +2641,7 @@ static void renderScreen() {
 // stay in sync). The window is a true half-scale of the 320x240 dashboard.
 static const int kPrevW = 160, kPrevH = 120;
 static const int kPrevX = (320 - kPrevW) / 2, kPrevY = 60;
-static const uint16_t kBarC    = C(0x2e,0x7d,0x32);   // displayed green (mockup topbar)
+static const uint16_t kBarC    = C(0x2e,0x7d,0x32);   // displayed green (design topbar)
 static const uint16_t kBorderC = C(0xff,0xd1,0x66);   // displayed yellow
 // TEMP-DEBUG: per-frame timing print + boot auto-demo (remove after diagnosis)
 static bool gTimingOn = false;
@@ -3053,7 +3052,7 @@ static void updateDynamicTexts() {
 //    anywhere else                                                -> weather refresh
 //  Each band contains nothing but its item (see the layout comments above),
 //  so wide hit areas are safe. Bands follow the ACTIVE THEME: theme 0 derives
-//  from gLayout; themes 1-3 use fixed bands around their mockup positions.
+//  from gLayout; themes 1-3 use fixed bands around their design positions.
 // ---------------------------------------------------------------------------
 struct TouchBands { int clkTop, clkBot, dateTop, dateBot, tempTop, tempBot, tempMaxX; };
 static TouchBands touchBands() {
