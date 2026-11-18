@@ -35,6 +35,32 @@ which documents the weather app itself.
 | Backlight (PWM) | 27 |
 | Touch SDA / SCL / RST | 33 / 32 / 25 |
 
+## WiFi radio: scanning (cost real debugging time — read before touching `wifi_conn.cpp`)
+- **The ESP32 is 2.4 GHz only.** Phones enumerate 2.4 + 5 (+6) GHz and merge
+  duplicates, so a phone's "15 networks" is not a number this chip can ever
+  match — part of any scan-count gap is physics, not a bug.
+- **The default active scan is unreliable.** Bare `WiFi.scanNetworks()` is an
+  *active* probe pass of only ~100–300 ms per channel (framework `WiFiScan.cpp`,
+  arduino-esp32 3.x): the radio sends probe requests and listens briefly on
+  each channel; APs that miss that window (weak signal, busy, or ignoring
+  probes) never appear — the classic "0–3 networks, never even the current
+  one" symptom (verified on this board 2026-11-18; a phone in the same spot
+  showed 15). A reliable scan is *passive* (listen for beacons):
+  `WiFi.scanNetworks(false, true, true, 400, 0)` = blocking, show-hidden,
+  passive, **400 ms dwell per channel, all channels (~6 s total)**. That is
+  what `wifiScanNetworks()` does; the parameter set is load-bearing — don't
+  "simplify" it back to the no-arg call.
+- **Scan only when the radio is fully idle.** While the station is connected
+  — or still tearing the link down — the scan gets truncated. So
+  `wifiScanNetworks()`: `setAutoReconnect(false)` + `disconnect()`, then
+  **poll until `WL_DISCONNECTED`** (a blind delay is not enough), 300 ms RF
+  settle, then scan. The device is offline for the ~6 s scan; the 10 s
+  reconnect check in `loop()` restores the link afterwards. This is by
+  design: it happens only inside the Wi-Fi settings flow.
+- **Modem sleep off around the scan.** `WiFi.setSleep(false)` — power-save
+  delays scan events. It stays off afterwards (plugged-in display; the mA
+  cost is negligible).
+
 ## Display gotchas (cost real debugging time — read before touching UI code)
 
 - **The panel displays INVERTED colors: displayed = ~written.** Verified against

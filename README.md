@@ -15,8 +15,8 @@ material split out of this file.
 This file is the shared reference for future work: read it first in any new thread on this project.
 ## Files
 - `src/main.cpp` — app shell: `setup()`/`loop()`, boot sequence, refresh cadence
-- `src/config.{h,cpp}` — centralized configuration: `UserSettings` (all user-adjustable settings + site defaults), app timing/NTP constants, NVS theme persistence (`loadTheme()`/`saveTheme()`); see the Configuration section
-- firmware modules: `src/display.{h,cpp}` (TFT init), `src/wifi_conn.{h,cpp}` (WiFi connect/auto-reconnect), `src/weather.{h,cpp}` (fetch/parse, SD card + dog image), `src/render.{h,cpp}` (themes + per-second partial updates), `src/picker.{h,cpp}` (theme picker + swipe animation), `src/touch.{h,cpp}` (touch zones + gestures), `src/time_util.{h,cpp}` (NTP + timezone), `src/metar.{h,cpp}` / `src/rain_timeline.{h,cpp}` (rain analysis), `src/theme_ids.h` (theme indices)
+- `src/config.{h,cpp}` — centralized configuration: `UserSettings` (all user-adjustable settings + site defaults), app timing/NTP constants, NVS persistence for every setting (`loadSettings()` + per-setting `save*()`), automatic/manual/unconfigured modes for location and timezone; see the Configuration section
+- firmware modules: `src/display.{h,cpp}` (TFT init), `src/wifi_conn.{h,cpp}` (WiFi credential seam + connect/auto-reconnect + scan), `src/weather.{h,cpp}` (fetch/parse, SD card + dog image), `src/render.{h,cpp}` (themes + per-second partial updates), `src/picker.{h,cpp}` (theme picker + swipe animation), `src/touch.{h,cpp}` (touch zones + gestures), `src/settings.{h,cpp}` (Settings app; see "Settings app (touchscreen)"), `src/keyboard.{h,cpp}` (blocking QWERTY + numeric keypad modals), `src/time_util.{h,cpp}` (NTP + timezone), `src/metar.{h,cpp}` / `src/rain_timeline.{h,cpp}` (rain analysis), `src/theme_ids.h` (theme indices)
 - `src/nunito_bff.h` — generated Nunito BFF font blobs (masters em9/10/12/13/20/48) shared by themes 1 (SKY), 2 (SPLIT) and 3 (BENTO); regenerate with `tools/make_nunito_bff.py`, verify with `tools/check_bff_space.py`
 - `src/dog_image.{h,cpp}` — SD-card PNG decoder; keeps natural RGB565 + alpha, composites per row at draw time (see Dog outfit images section)
 - `lib/puff/` — vendored Mark Adler `puff.c/h` (public-domain minimal DEFLATE inflater; the core's zlib is not linked into the app)
@@ -109,7 +109,7 @@ Generous fixed rectangles in landscape canvas coords (320x240), checked in this 
 | Anywhere else | — | immediate weather refetch + full render (original behavior) |
 
 - Per-action debounce: zone taps (dog/clock/date/temp) are debounced 300 ms (double-tap protection — a tighter window would just toggle the value back); a manual refresh tap is debounced 2 s (the fetch is blocking, so this only guards the tail after a fast fetch completes — it prevents back-to-back manual fetches on a fast network). Both clocks are independent: a toggle does not delay a refresh and vice versa.
-- Toggles are runtime state only (`userSettings.use24Hour`, `userSettings.dateFormat`, `userSettings.useCelsius`); not persisted across reboot (the theme is the only persisted setting — see Configuration).
+- Toggles update `userSettings.use24Hour` / `dateFormat` / `useCelsius` and are persisted via `saveDisplaySettings()` (explicit user change — see Configuration).
 - Each toggle does a full `renderScreen()`; the per-second partial updates share the same format helpers (`formatClock()`, `formatDateLine()`) and `drawClockAndDate()` keeps `lastClockBuf/lastDateBuf` in sync, so no ghosting or redundant repaints after a toggle.
 - While the THEME picker is up, `loop()` suppresses all main-display redraws (status changes, periodic refresh render, per-second partial updates) so it isn't clobbered; data fetching and dog-image reload still run normally. Picker gestures are evaluated on finger lift (`SwipeState` in `handleTouch()`): horizontal movement > 24 px (and more than twice the vertical) = **swipe** → next/previous theme (wraps around); a short (< 600 ms), small-movement press = **tap** → selects the previewed theme, saves it to NVS and returns to the main display. Ambiguous gestures are ignored.
 - The clock/date/temp bands above follow the active theme (`touchBands()`): theme 0 derives from `gLayout`, themes 1–3 use fixed bands around their item positions – so tapping where an item is drawn toggles it on every skin.
@@ -231,12 +231,14 @@ instance (`userSettings`), initialized with the defaults in `config.cpp`:
 
 | Field | Meaning | Default | Persisted |
 |---|---|---|---|
-| `lat` / `lon` | weather location (Open-Meteo requests) | from `src/local_config.h` (gitignored) | no |
-| `timezone` | `TimezoneRules`: std/DST offsets + DST transition (month, nth Sunday, wall-clock hour) | US Eastern (UTC-5/UTC-4, 2nd Sun Mar → 1st Sun Nov) | no |
-| `theme` | selected theme index (0–3) | BASIC (0), restored from NVS at boot | yes (NVS `cydwx`/`theme`) |
-| `useCelsius` | temperature display unit (F/C) | F | no |
-| `use24Hour` | clock format (12h/24h) | US 12-hour | no |
-| `dateFormat` | date line format (0/1) | "Thursday 12 November 2026" | no |
+| `lat` / `lon` | weather location (Open-Meteo requests) | from `src/local_config.h` (gitignored) | yes (`lat`/`lon` f32) |
+| `locationMode` | `SettingMode` for lat/lon: UNCONFIGURED / AUTOMATIC / MANUAL | MANUAL (existing installs keep their built-for-site values) | yes (`locMode` u8) |
+| `timezone` | `TimezoneRules`: std/DST offsets + DST transition (month, nth Sunday, wall-clock hour) | US Eastern (UTC-5/UTC-4, 2nd Sun Mar → 1st Sun Nov) | yes (`tzName` str, `tzStd`/`tzDst` i32, `tzDstS_M/W/H` + `tzDstE_M/W/H` u8) |
+| `timezoneMode` | `SettingMode` for the timezone (independent of `locationMode`) | MANUAL | yes (`tzMode` u8) |
+| `theme` | selected theme index (0–3) | BASIC (0), restored from NVS at boot | yes (`theme` u32) |
+| `useCelsius` | temperature display unit (F/C) | F | yes (`celsius` u8) |
+| `use24Hour` | clock format (12h/24h) | US 12-hour | yes (`clock24` u8) |
+| `dateFormat` | date line format (0/1) | "Thursday 12 November 2026" | yes (`datefmt` u8) |
 
 - App timing constants (`WEATHER_REFRESH_MS` 15 min, `WX_MIN_RETRY_MS` 30 s,
   `WIFI_RETRY_MS` 10 s, `NTP_BOOT_WAIT_MS` 10 s) and the NTP policy (UTC
@@ -246,16 +248,80 @@ instance (`userSettings`), initialized with the defaults in `config.cpp`:
   default in `config.cpp` (the DST-transition computation is generic over the
   rules struct).
 - Deliberately **not** in the config struct (implementation-specific, not
-  user settings): WiFi credentials (stay in `src/local_config.h`, consumed
-  directly by `wifi_conn.cpp`), METAR/NBM/HTTP timeout and rain-algorithm
-  constants (`weather.cpp`), SD card pins (`weather.cpp`), and touch
-  debounce/swipe-threshold constants (`touch.cpp` / `picker.cpp`).
-- Only the theme is persisted today. A touchscreen settings UI and NVS
-  persistence for the remaining `UserSettings` fields are planned, not
-  implemented — `UserSettings` is the intended home for them.
+  user settings): WiFi credentials (stay in `src/local_config.h` today, read
+  through the `wifiCredentials()` seam in `wifi_conn.cpp`; see WiFi), METAR/NBM/HTTP
+  timeout and rain-algorithm constants (`weather.cpp`), SD card pins
+  (`weather.cpp`), and touch debounce/swipe-threshold constants (`touch.cpp`
+  / `picker.cpp`).
+- **Persistence** (NVS namespace `cydwx`): `loadSettings()` in `setup()`
+  restores every setting before the first render; a missing key means "never
+  saved" → the default above applies. Loaded values are validated (lat/lon
+  ranges, timezone rules ranges, mode 0–2, theme clamped to 0–3) and invalid
+  or out-of-range data falls back to the default. Saves are explicit —
+  `saveTheme()` (picker selection), `saveDisplaySettings()` (clock/date/temp
+  touch toggles), `saveLocation()`/`saveTimezone()` (after a successful
+  automatic detection) — each writes only its own keys, so one setting is
+  never clobbered by another, and nothing is written continuously. If the NVS
+  namespace fails to open, all settings stay at their defaults and the saves
+  no-op.
+- **Automatic vs manual** (location and timezone independently): mode
+  UNCONFIGURED = no mode chosen yet; first successful auto-detection fills in
+  the value and leaves the mode AUTOMATIC. AUTOMATIC = firmware-determined,
+  refreshable whenever Wi-Fi is available. MANUAL = user-chosen, and automatic
+  detection never overwrites it: `applyAutoLocation()` / `applyAutoTimezone()`
+  are the seam the future geolocation/timezone services call, and they return
+  `false` without touching the value when the mode is MANUAL (or the value is
+  invalid). `locationAutoAllowed()` / `timezoneAutoAllowed()` gate the
+  refresh behavior. The detection services and the settings UI that lets the
+  user choose modes are not implemented yet.
+- **Existing-install migration**: an install that predates this persistence
+  has no `locMode`/`tzMode` keys; those load as MANUAL with the site defaults
+  (the values it was always running with), so a working install keeps its
+  location and timezone and can never be handed to automatic detection. The
+  legacy 5-theme numbering migration (`themeVer` < 2 → remap + write 2) is
+  unchanged and still guarded by `themeVer=2` on every save.
+
+## Settings app (touchscreen)
+Full-screen modal UI (`src/settings.{h,cpp}`), entered from the **SETTINGS** button (top-right corner) of the THEME picker; `< BACK` walks one level back at a time, the main page's `< BACK` returns to the picker and repaints the dashboard. While active, `touch.cpp` routes every touch to the settings app (`settingsTouch()`) and `main.cpp` suppresses dashboard redraws. Every change is written to NVS (`cydwx`) immediately — there is no Apply step (spec requirement).
+
+Main page: four section tiles.
+
+| Section | Rows | Behavior |
+|---|---|---|
+| APPEARANCE | THEME, TEMPERATURE, CLOCK, DATE | all four rows tap-to-cycle (theme cycles the 4 themes; the others toggle) |
+| WEATHER | LATITUDE, LONGITUDE | tap a row → blocking numeric keypad (range-checked; `< BACK` discards, original kept); sets `locationMode` MANUAL |
+| TIME & DATE | TIME ZONE, DAYLIGHT SAVING | TIME ZONE opens the paginated list (5 zones/page, `<` / `>` header arrows, `PAGE n/N` footer; opens on the page holding the current zone); DAYLIGHT SAVING toggles DST (on = +1 h during the DST window; off = `dstOffsetSec == stdOffsetSec`, window ignored) |
+| WI-FI | CURRENT NETWORK (status), NETWORKS (button) | see below |
+
+- **Wi-Fi flow** (see also `src/wifi_conn.{h,cpp}` and the scan requirements in
+  `docs/CYD-HARDWARE.md`): the WI-FI page shows the connected SSID as plain
+  **status text** (row 0 — display-only, deliberately not a button) and a
+  single **NETWORKS** button (row 1). **Entering the page never scans**; a
+  scan runs only when the user presses NETWORKS (first time) or the RESCAN
+  row. The SCAN page lists up to 20 results, **4 per page, strongest first**,
+  with `<` / `>` arrows in the header (Time-Zone-page style; the top-right
+  corner belongs to the arrows) and **RESCAN as the 5th row**; the footer
+  shows `PAGE n/N`. Tapping a network joins it: WPA networks open the
+  QWERTY keyboard (open networks join directly), ENTER commits, `< BACK`
+  discards and the previously saved password stays in NVS; an empty password
+  is accepted (some WPA networks genuinely use none). A successful join saves
+  the credentials to NVS (`wifiSaveCredentials()`) — they then take priority
+  over `local_config.h` on the next boot. During the ~6 s scan the device is
+  disconnected from its network; `loop()`'s 10 s reconnect timer restores the
+  link afterwards (acceptable by design — it happens only inside the Wi-Fi
+  settings flow).
+- **Keyboards** (`src/keyboard.{h,cpp}`, blocking modals): same header chrome
+  as the settings pages — `[ < BACK ]  TITLE  [ ENTER ]`, with `< BACK` in the
+  same top-left corner everywhere. ENTER commits, `< BACK` discards; the
+  entry lives in a draft buffer until commit, so the caller's value is only
+  replaced on KEY_OK. The header pills are hit-tested manually in the key
+  poll (they are drawn text, not widgets). No inactivity timeout — the
+  keyboard waits until the user chooses. The keypad validates its range and
+  shows the error in the hint line instead of committing.
 
 ## WiFi
-- Credentials + site location live in `src/local_config.h` (gitignored — copy `src/local_config.h.example` to `src/local_config.h` and fill in your WiFi SSID/password and your site's lat/lon; never commit real values); auto-reconnect in `loop()`.
+- Build-time defaults + site location live in `src/local_config.h` (gitignored — copy `src/local_config.h.example` to `src/local_config.h` and fill in your WiFi SSID/password and your site's lat/lon; never commit real values). Runtime credentials are read through one seam, `wifiCredentials()` (`wifi_conn.cpp`), which prefers **user-saved NVS credentials** (`cydwx/ssid` + `cydwx/pass`, written by the Settings > WI-FI page on a successful join — `wifiSaveCredentials()`) and falls back to the build-time values. NVS is plaintext (no encryption; acceptable for this device). Auto-reconnect in `loop()` (`WIFI_RETRY_MS` 10 s check).
+- **Scanning** (Settings > WI-FI): reliability requirements and the load-bearing scan parameters are documented in `docs/CYD-HARDWARE.md` ("WiFi radio: scanning"). The short version: passive 400 ms/channel scan (~6 s), only when the radio is fully idle, modem sleep off.
 - HTTPS via `WiFiClientSecure` + `setInsecure()` (no CA cert). All three clients (main Open-Meteo,
   NBM cross-check, METAR) set `setConnectionTimeout(5000)` (TCP connect + socket read /
   SO_RCVTIMEO) and `setHandshakeTimeout(10)` — the core's default TLS handshake timeout is 120 s,
@@ -288,7 +354,10 @@ log from t=0 (a plain port open does NOT reliably reset this board, verified
   theme-1 font load (details in "Nunito BFF fonts", `docs/CYD-HARDWARE.md`).
 - Boot also logs `[THEME] NVS: stored theme=.. ver=..` (what was read from NVS,
   ` (migrated)` if the legacy numbering migration ran) and `[THEME] active: NAME (n)`
-  (the theme actually in use after migration/clamping).
+  (the theme actually in use after migration/clamping). The NVS settings load
+  logs `[CFG] location: mode=.. lat=.. lon=..`, `[CFG] timezone: mode=.. NAME
+  (std ..s dst ..s)` and `[CFG] display: temp=.. clock=.. datefmt=..` (values
+  after NVS load; mode 0=unconfigured 1=automatic 2=manual).
 - Each refresh starts with `[WX] rssi=.. freeHeap=..`; each fetch logs
   `[WX] ... day=0|1|? rain=... next=...`.
 - NBM and METAR log their own `[NBM]` / `[METAR]` lines (freeHeap at request
