@@ -34,6 +34,7 @@
 #include "config.h"
 #include "render.h"
 #include "picker.h"
+#include "settings.h"
 #include "touch.h"
 #include "time_util.h"
 
@@ -47,14 +48,18 @@ void setup() {
   displayHardReset();
   displayInit();
 
+  // Restore the persisted user settings (NVS "cydwx") before anything that
+  // reads them: the first render, NTP offset, and weather fetch all follow.
+  loadSettings();
+  Serial.printf("[THEME] active: %s (%d)\n", themeName(userSettings.theme), userSettings.theme);
+
   // SD card + dog outfit image (implementation in weather.cpp).
   weatherInitSdAndDog();
-  // Restore the last selected display theme (NVS), then show it.
-  loadTheme();
-  Serial.printf("[THEME] active: %s (%d)\n", themeName(userSettings.theme), userSettings.theme);
   renderScreen();
 
-  // WiFi
+  // WiFi (today: build-time credentials from local_config.h via
+  // wifiCredentials(); the future touchscreen setup saves credentials to NVS
+  // and opens a setup screen when none exist — that hook goes here).
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   wifiEnsureConnected();
@@ -108,7 +113,9 @@ void loop() {
   if (wifiOk != lastWifiState || ntpSynced != lastNtpState) {
     lastWifiState = wifiOk;
     lastNtpState  = ntpSynced;
-    if (!themeSelectScreen) renderScreen();   // don't clobber the THEME picker
+    // Don't clobber the modal screens (picker / settings); they repaint
+    // themselves when the user leaves them.
+    if (!themeSelectScreen && !settingsActive()) renderScreen();
   }
 
   // ---- Periodic weather refresh (15 min), retry on failure ----
@@ -117,14 +124,18 @@ void loop() {
     lastWeatherTry = nowMs;
     // Data + outfit update even while the THEME picker is up; the redraw
     // waits until the user returns to the main display.
-    if (fetchWeather()) { refreshDogImage(); if (!themeSelectScreen) renderScreen(); }
+    if (fetchWeather()) {
+      refreshDogImage();
+      if (!themeSelectScreen && !settingsActive()) renderScreen();
+    }
   }
 
   // ---- Per-second tick: repaint clock/date only when their text changes ----
   bool timeChanged = ntpSynced && (nowMs / 1000 != lastClockDraw / 1000);
   if (timeChanged) {
     lastClockDraw = nowMs;
-    if (!themeSelectScreen) updateDynamicTexts();   // partial updates target the main display only
+    if (!themeSelectScreen && !settingsActive())    // partial updates target the main display only
+      updateDynamicTexts();
   }
 
 

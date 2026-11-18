@@ -5,6 +5,7 @@
 #include "wifi_conn.h"
 #include "render.h"
 #include "picker.h"
+#include "settings.h"
 
 // ---------------------------------------------------------------------------
 //  Touch targets (per-action debounce: 300 ms zone taps, 2 s refresh)
@@ -73,8 +74,30 @@ void handleTouch() {
   lgfx::touch_point_t pts[5];
   int n = tft.getTouch(pts, 5);
 
+  // ---- SETTINGS screen: modal — route every tap, the main-display zones and
+  // the THEME picker are inactive while it is up (also reached from the
+  // picker's top-bar "SETTINGS" button).
+  //  Fires on the DOWN edge only and re-arms on touch-up: a tap that switches
+  //  the page must not re-fire on the new page while the finger is still down.
+  // ----
+  static bool settingsDown = false;
+  if (settingsActive()) {
+    if (n > 0) {
+      if (!settingsDown) {
+        settingsDown = true;
+        settingsTouch(pts[0].x, pts[0].y);
+      }
+    } else {
+      settingsDown = false;
+    }
+    return;
+  }
+  settingsDown = false;
+
   // ---- THEME picker: gesture tracking (swipe left/right, tap to select) ----
   if (themeSelectScreen) {
+    pickerPollRelease();
+    if (pickerAwaitingRelease()) return;   // swallow the press that opened us
     static uint32_t lastAction = 0;   // debounce between completed gestures
     if (!swipe.active && n > 0) {
       swipe.active = true;
@@ -98,8 +121,48 @@ void handleTouch() {
           if (millis() - lastAction < 300) return;   // debounce
           lastAction = millis();
           animatePickerSwipe(dx < 0 ? +1 : -1);   // slides old out / new in, updates previewTheme
-        } else if (dt < 600 && adx <= 12 && ady <= 12) {   // tap: select this theme
-          userSettings.theme = previewTheme;
+        } else if (dt < 600 && adx <= 12 && ady <= 12) {   // tap
+          int tx = swipe.startX, ty = swipe.startY;
+          if (ty < 20) {                  // top bar: corner buttons only
+            if (tx < 56) {                // "< BACK"
+              themeSelectScreen = false;
+              Serial.println("[TOUCH] picker -> dashboard");
+              renderScreen();
+              return;
+            }
+            if (tx >= 264) {              // "SETTINGS"
+              themeSelectScreen = false;
+              Serial.println("[TOUCH] picker -> settings");
+              settingsEnterFromPicker();
+              return;
+            }
+            Serial.println("[TOUCH] picker top bar ignored");
+            return;
+          }
+          // Bottom bar (y>=220) already shows "< PREV" (left) and "NEXT >"
+          // (right): tapping either corner jumps to that theme instantly,
+          // no slide animation. The bar's empty middle is ignored.
+          if (ty >= 220) {
+            if (tx < 96) {
+              if (millis() - lastAction < 300) return;   // debounce
+              lastAction = millis();
+              previewTheme = (previewTheme + THEME_COUNT - 1) % THEME_COUNT;
+              drawThemePicker();
+              Serial.printf("[TOUCH] picker corner -> prev %s (%d)\n", themeName(previewTheme), previewTheme);
+              return;
+            }
+            if (tx > 224) {
+              if (millis() - lastAction < 300) return;   // debounce
+              lastAction = millis();
+              previewTheme = (previewTheme + 1) % THEME_COUNT;
+              drawThemePicker();
+              Serial.printf("[TOUCH] picker corner -> next %s (%d)\n", themeName(previewTheme), previewTheme);
+              return;
+            }
+            Serial.println("[TOUCH] picker bottom bar ignored");
+            return;
+          }
+          userSettings.theme = previewTheme;   // tap elsewhere: select this theme
           saveTheme();
           themeSelectScreen = false;
           Serial.printf("[TOUCH] theme selected -> %s (%d)\n", themeName(userSettings.theme), userSettings.theme);
@@ -137,6 +200,7 @@ void handleTouch() {
     themeSelectScreen = true;
     previewTheme = userSettings.theme;
     swipe.active = false;
+    pickerEnter();                       // this tap is still on the glass
     Serial.println("[TOUCH] -> theme picker");
     drawThemePicker();
     return;
@@ -145,6 +209,7 @@ void handleTouch() {
   if (inClockZone(x, y)) {              // clock -> 12h <-> 24h
     userSettings.use24Hour = !userSettings.use24Hour;
     Serial.printf("[TOUCH] clock -> %s\n", userSettings.use24Hour ? "24h" : "12h");
+    saveDisplaySettings();                // explicit user change -> persist
     renderScreen();                           // full redraw in the new format
     return;
   }
@@ -152,6 +217,7 @@ void handleTouch() {
   if (inDateZone(x, y)) {               // date line -> cycle format
     userSettings.dateFormat = (userSettings.dateFormat + 1) % 2;
     Serial.printf("[TOUCH] date -> format %d\n", userSettings.dateFormat);
+    saveDisplaySettings();                // explicit user change -> persist
     renderScreen();
     return;
   }
@@ -159,6 +225,7 @@ void handleTouch() {
   if (inTempZone(x, y)) {               // temperature -> F <-> C
     userSettings.useCelsius = !userSettings.useCelsius;
     Serial.printf("[TOUCH] temp -> %s\n", userSettings.useCelsius ? "C" : "F");
+    saveDisplaySettings();                // explicit user change -> persist
     renderScreen();                           // all displayed temps convert together
     return;
   }

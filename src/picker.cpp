@@ -22,28 +22,57 @@ static const int kPrevW = 160, kPrevH = 120;
 static const int kPrevX = (320 - kPrevW) / 2, kPrevY = 60;
 static const uint16_t kBarC    = C(0xff,0xd1,0x66);   // displayed yellow (matches the border)
 static const uint16_t kBorderC = C(0xff,0xd1,0x66);   // displayed yellow
+static const uint16_t kBgC     = C(0xe8,0xed,0xf3);   // solid picker background
 // TEMP-DEBUG: per-frame timing print + boot auto-demo (remove after diagnosis)
 static bool gTimingOn = false;
+
+// ---- Opening-press drain ---------------------------------------------------
+// The tap that opens the picker (dog-zone tap, or Settings "< BACK") is
+// usually still on the glass when the picker is drawn; without a drain the
+// picker would evaluate that lingering press as its own tap/swipe. Arm the
+// drain on every entry point; touch.cpp keeps feeding it until the finger
+// lifts.
+static bool gAwaitRelease = false;
+
+void pickerEnter() { gAwaitRelease = true; }
+
+void pickerPollRelease() {
+  if (!gAwaitRelease) return;
+  int16_t x, y;
+  if (!tft.getTouch(&x, &y)) gAwaitRelease = false;   // finger lifted
+}
+
+bool pickerAwaitingRelease() { return gAwaitRelease; }
 
 // Everything on the picker screen EXCEPT the preview window: background,
 // yellow border, yellow bars with labels, hint line. idx is the theme whose
 // name goes in the top bar (its neighbours fill the bottom bar).
 static void drawPickerChrome(int idx) {
-  fillBackground();   // normal day/night background behind the preview
+  tft.fillScreen(kBgC);   // full-screen solid background (no stale pixels)
 
   tft.drawRect(kPrevX - 1, kPrevY - 1, kPrevW + 2, kPrevH + 2, kBorderC);
 
-  // Top bar: theme number + name
+  // Top bar: theme number + name (centered), corner buttons at both ends.
+  // Hit zones (touch.cpp): x < 56 = "< BACK" (dashboard), x >= 264 =
+  // "SETTINGS" (settings screen), the rest of the 20 px bar is ignored.
   tft.fillRect(0, 0, 320, 20, kBarC);
   char top[48];
   snprintf(top, sizeof(top), "THEME %d/%d: %s", idx + 1, THEME_COUNT, themeName(idx));  // 1-based for the user
+  tft.setTextDatum(TL_DATUM);   // datum is inherited from the previous caller;
+                                // leaving it MC_DATUM shifted the label into "< BACK"
   tft.setTextSize(1.5f);
   int tw = tft.textWidth(top);
   tft.setTextColor(TFT_WHITE);   // displays black on the yellow bar
   tft.drawString(top, (320 - tw) / 2, 4);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextSize(1.0f);
+  tft.setTextColor(C(0x3d, 0x5f, 0x8f));   // blue on yellow (matches the hint)
+  tft.drawString("< BACK", 28, 10);
+  tft.drawString("SETTINGS", 292, 10);
+  tft.setTextDatum(TL_DATUM);
 
   // Hint in the gap above the preview
-  const char* hint = "SWIPE LEFT/RIGHT - TAP TO SELECT";
+  const char* hint = "SWIPE OR TAP CORNER: PREV/NEXT · TAP: SELECT";
   tft.setTextSize(1.0f);
   int hw = tft.textWidth(hint);
   tft.setTextColor(C(0x3d,0x5f,0x8f));
@@ -245,7 +274,7 @@ void animatePickerSwipe(int dir) {   // +1 = next (enters from right), -1 = prev
     if (sprites) {
       const void* a = sprA.getBuffer();
       const void* b = sprB.getBuffer();
-      clearRegion(0, kPrevY, 320, kPrevH);   // repaint whole band (background)
+      tft.fillRect(0, kPrevY, 320, kPrevH, kBgC);   // repaint whole band (picker bg)
       // Each card blits independently: on the final frame the old card is
       // fully off-screen (A.w == 0) while the new one still needs to land
       // at the preview position (an && here left the preview white).
@@ -255,7 +284,7 @@ void animatePickerSwipe(int dir) {   // +1 = next (enters from right), -1 = prev
     } else {
       // Classic immediate-mode path (slow but always works): repaint the
       // band, then redraw each theme clipped to its visible card rect.
-      clearRegion(0, kPrevY, 320, kPrevH);
+      tft.fillRect(0, kPrevY, 320, kPrevH, kBgC);
       if (A.w > 0) {
         tft.setClipRect(A.dstX, kPrevY, A.w, kPrevH);
         renderTheme(oldIdx, T{0.5f, 0.5f, oldX, kPrevY});

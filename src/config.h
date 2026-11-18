@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <Preferences.h>
 #include "theme_ids.h"
 
 // ---------------------------------------------------------------------------
@@ -8,9 +9,20 @@
 //  the site defaults, and the app-wide timing/service constants.
 //
 //  The initial values of userSettings (set in config.cpp) are the defaults.
-//  Only `theme` is persisted today (NVS, loadTheme/saveTheme); the rest are
-//  runtime state toggled by taps, persisted later.
+//  Every setting is persisted in NVS (namespace "cydwx"): loadSettings()
+//  restores them at boot (defaults fill anything never saved, invalid values
+//  fall back to defaults), and the save*() functions persist explicit
+//  changes — never continuously.
 // ---------------------------------------------------------------------------
+
+// How a location/timezone value was chosen. Persisted PER SETTING, so the two
+// stay independent (automatic location + manual timezone, or vice versa):
+//   UNCONFIGURED – no mode chosen yet; first successful auto-detection fills
+//                  it in (and leaves the mode AUTOMATIC)
+//   AUTOMATIC    – firmware determines it from network-based services;
+//                  refreshable whenever Wi-Fi is available
+//   MANUAL       – user-chosen; automatic detection never overwrites it
+enum class SettingMode : uint8_t { UNCONFIGURED = 0, AUTOMATIC = 1, MANUAL = 2 };
 
 // Daylight-saving rules: the transition happens at the (week-th) Sunday of
 // (month) at (hourLocal) local wall-clock time. Offsets are in seconds,
@@ -41,8 +53,10 @@ constexpr TimezoneRules TIMEZONE_US_EASTERN = {
 struct UserSettings {
   float lat;                      // weather location (Open-Meteo); default from local_config.h
   float lon;                      // weather location (Open-Meteo); default from local_config.h
+  SettingMode locationMode;       // how lat/lon were chosen
   TimezoneRules timezone;         // local timezone + DST rules; default US Eastern
-  int  theme;                     // selected theme (0..THEME_COUNT-1); persisted in NVS
+  SettingMode timezoneMode;       // how the timezone was chosen
+  int  theme;                     // selected theme (0..THEME_COUNT-1)
   bool useCelsius;                // temperature display: false = Fahrenheit
   bool use24Hour;                 // clock: false = US 12-hour ("2:35 PM")
   int  dateFormat;                // 0: "Thursday 12 November 2026"  1: "Thursday November 12, 2026"
@@ -50,11 +64,38 @@ struct UserSettings {
 
 extern UserSettings userSettings;
 
-// Restore the last selected theme from NVS (namespace "cydwx"); called in
-// setup() before the first render. Migrates the legacy 5-theme numbering.
-void loadTheme();
-// Persist the currently selected theme to NVS; called on picker selection.
-void saveTheme();
+// Shared NVS handle (namespace "cydwx"); owned by config.cpp, also used by
+// wifi_conn.cpp for the user-saved Wi-Fi credentials ("ssid"/"pass").
+extern Preferences prefs;
+
+// Boot: open the "cydwx" NVS namespace and restore every persisted setting.
+// Called in setup() before the first render and before NTP/weather use the
+// values. Existing-install migration: a setting whose mode was never saved
+// loads as MANUAL (its default value is the value it was always running
+// with), so previously working locations/timezones are never handed to
+// automatic detection.
+void loadSettings();
+
+// Explicit per-setting saves — each writes only its own keys, so saving one
+// setting never touches the others. Called on user change (touch toggles,
+// picker selection) and after a successful automatic detection.
+void saveTheme();            // theme index (also records the numbering version)
+void saveLocation();         // lat/lon + location mode
+void saveTimezone();         // timezone rules + timezone mode
+void saveDisplaySettings();  // temp unit, clock format, date format
+
+// Automatic-detection seam for the future geolocation/timezone services:
+// true while the setting may be (re)determined automatically — UNCONFIGURED
+// (first time) or AUTOMATIC (refresh). MANUAL is never overwritten.
+bool locationAutoAllowed();
+bool timezoneAutoAllowed();
+// Apply an auto-detected value. Returns false (value unchanged) when the
+// setting is MANUAL or the value is invalid. On success the mode becomes
+// AUTOMATIC (UNCONFIGURED transitions on first detection) and the change is
+// persisted. tz.name must point to persistent storage (it is kept as a
+// pointer in userSettings and copied into NVS on save).
+bool applyAutoLocation(float lat, float lon);
+bool applyAutoTimezone(const TimezoneRules& tz);
 
 // ---------------------------------------------------------------------------
 //  App timing + service constants

@@ -195,12 +195,16 @@ lgfx::LGFXBase* gT = &tft;
 void drawThemeBg(int idx, const T& t) {
   int rows = max(1, t.H(240));
   for (int i = 0; i < rows; i++) {
+    // i is a PREVIEW-space row: fill the actual panel row `t.oy + i` (NOT
+    // t.Y(i) — that applies the scale a second time, so at the 0.5x picker
+    // preview the 120 rows collapse onto 60 pixels and the bottom half of
+    // the window is never painted).
     int yFull = (240 * i + rows / 2) / rows;
     if (idx == THEME_SPLIT) {   // split: left solid + right per-row gradient
-      gT->fillRect(t.X(0),   t.Y(i), max(1, t.W(214)),     1, bgCode(THEME_SPLIT, 0, yFull));
-      gT->fillRect(t.X(214), t.Y(i), max(1, t.W(320 - 214)), 1, bgCode(THEME_SPLIT, 267, yFull));
+      gT->fillRect(t.X(0),   t.oy + i, max(1, t.W(214)),     1, bgCode(THEME_SPLIT, 0, yFull));
+      gT->fillRect(t.X(214), t.oy + i, max(1, t.W(320 - 214)), 1, bgCode(THEME_SPLIT, 267, yFull));
     } else {
-      gT->fillRect(t.X(0), t.Y(i), max(1, t.W(320)), 1, bgCode(idx, 0, yFull));
+      gT->fillRect(t.X(0), t.oy + i, max(1, t.W(320)), 1, bgCode(idx, 0, yFull));
     }
   }
 }
