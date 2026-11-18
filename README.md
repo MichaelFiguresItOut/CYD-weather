@@ -289,27 +289,48 @@ Main page: four section tiles.
 | Section | Rows | Behavior |
 |---|---|---|
 | APPEARANCE | THEME, TEMPERATURE, CLOCK, DATE | all four rows tap-to-cycle (theme cycles the 4 themes; the others toggle) |
-| WEATHER | LATITUDE, LONGITUDE | tap a row → blocking numeric keypad (range-checked; `< BACK` discards, original kept); sets `locationMode` MANUAL |
+| WEATHER | LATITUDE, LONGITUDE | tap a row → blocking numeric keypad (range-checked; `< BACK` discards, original kept); the keypad opens with the `|` cursor under the digit the finger tapped on the row (tapping the field moves it), digits insert at the cursor, BAK backspaces left of it and DEL deletes right of it — so a coordinate can be fixed in place; sets `locationMode` MANUAL |
 | TIME & DATE | TIME ZONE, DAYLIGHT SAVING | TIME ZONE opens the paginated list (5 zones/page, `<` / `>` header arrows, `PAGE n/N` footer; opens on the page holding the current zone); DAYLIGHT SAVING toggles DST (on = +1 h during the DST window; off = `dstOffsetSec == stdOffsetSec`, window ignored) |
-| WI-FI | CURRENT NETWORK (status), NETWORKS (button) | see below |
+| WI-FI | CURRENT NETWORK (status), SCAN NETWORKS (scan/join), ADD NETWORK (manual entry), WIFI ON/OFF (power), RESTORE SAVED NETWORK (build-time network) | see below |
 
 - **Wi-Fi flow** (see also `src/wifi_conn.{h,cpp}` and the scan requirements in
   `docs/CYD-HARDWARE.md`): the WI-FI page shows the connected SSID as plain
   **status text** (row 0 — display-only, deliberately not a button) and a
-  single **NETWORKS** button (row 1). **Entering the page never scans**; a
-  scan runs only when the user presses NETWORKS (first time) or the RESCAN
-  row. The SCAN page lists up to 20 results, **4 per page, strongest first**,
+  **SCAN NETWORKS** button (row 1). **Entering the page never scans**; a
+  scan runs only when the user presses SCAN NETWORKS (first time) or the
+  RESCAN row. The SCAN page lists up to 40 results, **4 per page, strongest first**,
   with `<` / `>` arrows in the header (Time-Zone-page style; the top-right
-  corner belongs to the arrows) and **RESCAN as the 5th row**; the footer
-  shows `PAGE n/N`. Tapping a network joins it: WPA networks open the
-  QWERTY keyboard (open networks join directly), ENTER commits, `< BACK`
-  discards and the previously saved password stays in NVS; an empty password
-  is accepted (some WPA networks genuinely use none). A successful join saves
-  the credentials to NVS (`wifiSaveCredentials()`) — they then take priority
-  over `local_config.h` on the next boot. During the ~6 s scan the device is
-  disconnected from its network; `loop()`'s 10 s reconnect timer restores the
-  link afterwards (acceptable by design — it happens only inside the Wi-Fi
-  settings flow).
+  corner belongs to the arrows) and **RESCAN as the 5th row — shown even
+  when the list is empty or the scan found nothing, so the page is never a
+  dead end**; the footer shows `PAGE n/N`. Tapping a network joins it: WPA
+  networks open the QWERTY keyboard (open networks join directly), ENTER
+  commits, `< BACK` discards and the previously saved password stays in NVS;
+  an empty password is accepted (some WPA networks genuinely use none). A
+  scan needs the radio idle, so it disconnects the current link first and —
+  once the list is shown — **reconnects to the previous network itself**
+  (footer: `RECONNECTING...`), because the main loop's reconnect is paused
+  while Settings is open. The
+  **ADD NETWORK** row (page title: **WI-FI (2.4GHz only)** — the radio can
+  only see 2.4 GHz, so the label is on the page and every Wi-Fi sub-page)
+  enters an SSID and a password on the QWERTY keyboard (ENTER with an empty
+  password field joins with none) and connects without scanning. A
+  successful join (scanned or manual) saves the credentials to NVS
+  (`wifiSaveCredentials()`) — they then take priority over `local_config.h`
+  on the next boot. **WIFI ON/OFF** turns the radio physically off/on
+  (`WiFi.mode(WIFI_OFF)` — RF off, not just disconnected): off also pauses
+  the main loop's 10 s auto-reconnect, and pressing SCAN NETWORKS while it
+  is off does nothing but prompt to turn the radio on (a scan must not
+  silently re-enable it; a join does — explicit intent to connect). Off is
+  a session setting — a reboot always comes back with Wi-Fi on. On
+  reconnects with the current credentials (NVS, else build-time) after a
+  short RF settle (a connect issued immediately after the OFF→STA switch is
+  dropped by the driver).
+  **RESTORE SAVED NETWORK** erases user-saved credentials from NVS and
+  connects to the build-time network from `local_config.h` (the row's value
+  shows that SSID). While the Settings modal is open the main loop neither auto-
+  reconnects nor runs its periodic weather fetch — both are multi-second
+  blocking operations and would swallow touch events (the board feels
+  frozen); reconnecting resumes automatically once the user leaves Settings.
 - **Keyboards** (`src/keyboard.{h,cpp}`, blocking modals): same header chrome
   as the settings pages — `[ < BACK ]  TITLE  [ ENTER ]`, with `< BACK` in the
   same top-left corner everywhere. ENTER commits, `< BACK` discards; the
@@ -317,7 +338,17 @@ Main page: four section tiles.
   replaced on KEY_OK. The header pills are hit-tested manually in the key
   poll (they are drawn text, not widgets). No inactivity timeout — the
   keyboard waits until the user chooses. The keypad validates its range and
-  shows the error in the hint line instead of committing.
+  shows the error in the hint line instead of committing. The numeric keypad
+  shows a static `|` cursor (no blink): tapping the field moves it
+  (the settings row tap pre-places it on the tapped digit), digits and `-`
+  insert at the cursor, the BAK key (backspace) removes the character to
+  its left and the DEL key removes the character to its right.
+  QWERTY (passwords, manual SSIDs) uses the same `|` cursor: tapping the
+  field moves it, keys insert at it, BAK/DEL delete left/right of it; long
+  entries (31-char SSIDs, 64-char passwords) scroll within the field to
+  keep the cursor visible. Its bottom row is `123` (letter/symbol pages),
+  SPACE and DEL; the shift toggle (`abc`/`ABC`) and BAK sit in the Z-row —
+  no duplicated labels in either layout.
 
 ## WiFi
 - Build-time defaults + site location live in `src/local_config.h` (gitignored — copy `src/local_config.h.example` to `src/local_config.h` and fill in your WiFi SSID/password and your site's lat/lon; never commit real values). Runtime credentials are read through one seam, `wifiCredentials()` (`wifi_conn.cpp`), which prefers **user-saved NVS credentials** (`cydwx/ssid` + `cydwx/pass`, written by the Settings > WI-FI page on a successful join — `wifiSaveCredentials()`) and falls back to the build-time values. NVS is plaintext (no encryption; acceptable for this device). Auto-reconnect in `loop()` (`WIFI_RETRY_MS` 10 s check).

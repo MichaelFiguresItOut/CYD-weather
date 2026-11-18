@@ -20,9 +20,16 @@ struct WifiCreds {
 
 WifiCreds wifiCredentials();
 
+// Radio power (Settings > Wi-Fi "WIFI ON/OFF" row). Turning the radio off
+// stops the main loop's auto-reconnect until it is turned back on; the
+// state is not persisted — a reboot always comes back with Wi-Fi on.
+bool wifiEnabled();
+void wifiSetRadio(bool on);
+
 // Connect if not already connected, using wifiCredentials(). Blocks up to
-// ~15 s. Safe to call repeatedly (used by boot, the reconnect timer, the
-// manual refresh touch, and the weather fetch).
+// ~20 s. Safe to call repeatedly (used by boot, the reconnect timer, the
+// manual refresh touch, and the weather fetch). Returns false without
+// touching the radio while it is turned off.
 bool wifiEnsureConnected();
 
 // Disconnect (if needed) and connect to the given network. Blocks up to

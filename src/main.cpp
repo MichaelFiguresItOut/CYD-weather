@@ -93,7 +93,13 @@ void loop() {
   uint32_t nowMs = millis();
 
   // ---- Reconnect WiFi if dropped (check every 10 s) ----
-  if (WiFi.status() != WL_CONNECTED && nowMs - lastWifiCheck >= WIFI_RETRY_MS) {
+  // Not while the Settings modal is up: the join/scan pages manage
+  // connectivity themselves, and the blocking ~20 s connect attempt would
+  // starve handleTouch() (touches are polled only in this loop — a tap
+  // made during the block is lost, and the board feels frozen).
+  // wifiEnabled() keeps the loop from fighting the user's "WIFI ON/OFF: OFF".
+  if (wifiEnabled() && !settingsActive() && WiFi.status() != WL_CONNECTED &&
+      nowMs - lastWifiCheck >= WIFI_RETRY_MS) {
     lastWifiCheck = nowMs;
     wifiEnsureConnected();
   }
@@ -120,7 +126,9 @@ void loop() {
 
   // ---- Periodic weather refresh (15 min), retry on failure ----
   bool needWeather = !wx.valid || (nowMs - wx.lastUpdateMs >= WEATHER_REFRESH_MS);
-  if (needWeather && wifiOk && nowMs - lastWeatherTry >= WX_MIN_RETRY_MS) {
+  // Skipped while Settings is open: the fetch is a multi-second network
+  // block that would swallow touch events the same way the reconnect does.
+  if (needWeather && wifiOk && !settingsActive() && nowMs - lastWeatherTry >= WX_MIN_RETRY_MS) {
     lastWeatherTry = nowMs;
     // Data + outfit update even while the THEME picker is up; the redraw
     // waits until the user returns to the main display.

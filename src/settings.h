@@ -14,7 +14,8 @@
 //    TIME & DATE  - timezone list, temperature unit, 12/24-hour clock,
 //                   date line format
 //    WI-FI        - network scan + join (QWERTY keyboard for credentials),
-//                   connect/disconnect status, forget saved credentials
+//                   manual SSID entry, radio on/off, restore the build-time
+//                   network (erases user-saved credentials)
 //
 //  Navigation: every screen has < BACK; deeper screens (theme list, timezone
 //  pages, scan results) go back to their section page; the sections go back

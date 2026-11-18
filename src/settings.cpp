@@ -7,7 +7,8 @@
 //    APPEARANCE   – theme (cycles 4), °F/°C, 12/24 h, date format
 //    WEATHER      – latitude / longitude (keypadNumeric)
 //    TIME         – time zone (paged list, TZLIST), DST on/off
-//    WIFI         – current network (connect), network scan
+//    WIFI         – current network, network scan, manual SSID entry,
+//                   radio on/off, restore build-time network
 //    SCAN         – scan results (tap to join, keyboardQwerty password)
 //
 //  "< BACK" on MAIN returns to the THEME picker (the picker's own "< BACK"
@@ -33,6 +34,7 @@
 #include "display.h"
 #include "picker.h"
 #include "keyboard.h"
+#include "local_config.h"
 #include "theme_ids.h"
 #include "timezones.h"
 #include "wifi_conn.h"
@@ -53,9 +55,13 @@ constexpr int ROW_Y0     = 34, ROW_H = 36, ROW_GAP = 3;        // up to 5 rows
 
 constexpr int TZ_PER_PAGE   = 5;    // TIMEZONES per TIMEZONE list page
 constexpr int SCAN_PER_PAGE = 4;    // networks per SCAN page (row 5 = RESCAN)
-constexpr int SCAN_LIST_MAX = 20;   // stored scan results (paginated)
+// Stored scan results (paginated). The ESP32 keeps every AP the passive
+// pass sees; this is how many we copy out of it — 20 was not enough in a
+// busy area and the user's own (weaker or later-channel) network was cut
+// off the list.
+constexpr int SCAN_LIST_MAX = 40;
 constexpr int WIFI_SSID_MAX = 31;
-constexpr int WIFI_MIN_RSSI = -85;  // ignore only truly weak links (noise floor)
+constexpr int WIFI_MIN_RSSI = -90;  // weak-but-present APs still show (phones list to ~-90); below is noise
 
 // Colors (displayed values; C() maps them to this inverted panel's code
 // space). Page background is dark so the white rows and the light footer
@@ -111,6 +117,19 @@ void truncText(const char* s, int size, int maxPx, char* out, int outLen) {
   snprintf(out, outLen, "%.*s", (int)n, s);
 }
 
+// Map a tap's x to a character index of the number in a coordinate row
+// ("LATITUDE: -41.2862"), mirroring drawListRow's rendering: the whole
+// label at size 2 if it fits 180 px, else size 1 (these 17-20 char labels
+// always fit the 205 px truncation budget, so nothing is cut), left-
+// aligned at x = ROW_X + 10. Taps on the "LATITUDE:" part map to 0.
+int coordCursorAt(const char* prefix, const char* num, int x) {
+  char label[48];
+  snprintf(label, sizeof(label), "%s%s", prefix, num);
+  int sz = (txtW(label, 2) <= 180) ? 2 : 1;
+  int x0 = ROW_X + 10 + txtW(prefix, sz);
+  return textCharIndexAt(num, x0, x, (float)sz);
+}
+
 void setStatus(const char* s) { snprintf(wifiMsg, sizeof(wifiMsg), "%s", s); }
 
 // Wi-Fi status line: transient message wins while set, else the live state.
@@ -129,12 +148,12 @@ int scanPageCount() {
 
 // --- Drawing -----------------------------------------------------------
 
-// Top-right pills: hasNext = ">" (TZ page next), hasPrev = "<" just to its
-// left (TZ page previous); action = an accent pill in the ">" slot (the SCAN
-// page's "RESCAN"). hasNext/action are never both true. The pill slots stay
-// at fixed x positions on every page — only their presence varies.
+// Top-right pills: hasNext = ">" (TZ/SCAN page next), hasPrev = "<" just to
+// its left (page previous); action = an accent pill in the ">" slot.
+// hasNext/action are never both true. The pill slots stay at fixed x
+// positions on every page — only their presence varies.
 void drawHeader(const char* title, bool hasNext, const char* action = nullptr,
-                bool hasPrev = false, int titleCx = 160) {
+                bool hasPrev = false) {
   tft.fillRect(0, 0, 320, HDR_H, colHeader);
   tft.fillRoundRect(BTN_BACK_X, 2, BTN_BACK_W, BTN_H, 5, colBtnBg);
   tft.drawRoundRect(BTN_BACK_X, 2, BTN_BACK_W, BTN_H, 5, colBtnBd);
@@ -167,9 +186,19 @@ void drawHeader(const char* title, bool hasNext, const char* action = nullptr,
     tft.setTextColor(colHeader);
     tft.drawString("<", BTN_PREV_X + BTN_NEXT_W / 2, 12);
   }
+  // Title: centered in the pill-free gap, auto-shrunk (the keyboard header
+  // does the same) so long titles like "WI-FI SCAN (2.4GHz only)" stay clear
+  // of "< BACK" and the page arrows.
+  int l = BTN_BACK_X + BTN_BACK_W + 4;
+  int rr = hasPrev ? (BTN_PREV_X - 4)
+           : (hasNext || (action && action[0])) ? (BTN_NEXT_X - 4)
+           : 316;
+  int tw = txtW(title, 2);
+  float ts = (tw > rr - l) ? (float)(rr - l) * 2.0f / (float)tw : 2.0f;
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextSize(ts);
   tft.setTextColor(C(0xFF, 0xFF, 0xFF));
-  tft.setTextSize(2);
-  tft.drawString(title, titleCx, 13);
+  tft.drawString(title, (l + rr) / 2, 13);
 }
 
 // Bottom line: dim hint (left) + Wi-Fi status (right).
@@ -242,7 +271,7 @@ void drawMain() {
     { "APPEARANCE",  "theme · units · clock · date" },
     { "WEATHER",     "location (lat/lon)" },
     { "TIME & DATE", "time zone · daylight saving" },
-    { "WI-FI",       "networks · join" },
+    { "WI-FI",       "networks · join · add" },
   };
   for (int i = 0; i < 4; i++)
     drawRow(i, items[i][0], items[i][1], i == sGrid);
@@ -290,8 +319,7 @@ void drawTzList() {
   tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
   // "<" (when not first page) + ">" (when not last page); the title is
   // centered in the space left of the "<" slot so it never collides.
-  drawHeader("TIME ZONE", tzPage < tzPageCount() - 1, nullptr,
-             tzPage > 0, 128);
+  drawHeader("TIME ZONE", tzPage < tzPageCount() - 1, nullptr, tzPage > 0);
   int cur = timezoneIndexByRules(userSettings.timezone);
   for (int i = 0; i < TZ_PER_PAGE; i++) {
     int idx = tzPage * TZ_PER_PAGE + i;
@@ -307,7 +335,7 @@ void drawTzList() {
 
 void drawWifi() {
   tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
-  drawHeader("WI-FI", false);
+  drawHeader("WI-FI (2.4GHz only)", false);
   // Row 0: the connected network as plain status text — deliberately
   // without the white button styling, and not tappable.
   tft.setTextDatum(TL_DATUM);
@@ -326,21 +354,31 @@ void drawWifi() {
   if (scanning)            snprintf(nval, sizeof(nval), "SCANNING...");
   else if (netCount > 0)   snprintf(nval, sizeof(nval), "%d FOUND", netCount);
   else                     snprintf(nval, sizeof(nval), "TAP TO SCAN");
-  drawListRow(1, "NETWORKS", nval, sGrid == 1);
-  drawFooter("TAP NETWORKS TO SCAN / JOIN");
+  drawListRow(1, "SCAN NETWORKS", nval, sGrid == 1);
+  drawListRow(2, "ADD NETWORK", "TYPE SSID / PASS", sGrid == 2);
+  // Row 3: radio power (off is a session setting, not persisted).
+  drawListRow(3, "WIFI ON/OFF", wifiEnabled() ? "ON" : "OFF", sGrid == 3);
+  // Row 4: restore the build-time network (erases user-saved credentials).
+  char def[40];
+  truncText(WIFI_SSID, 1, 130, def, sizeof(def));
+  drawListRow(4, "RESTORE SAVED NETWORK", def, sGrid == 4);
+  drawFooter("SCAN / ADD / WIFI / RESTORE");
 }
 
 void drawScan() {
   tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
   // The top-right corner is the page arrows now (same as the TZ page), so
   // RESCAN is the last row of the list instead of a header pill.
-  drawHeader("WI-FI SCAN", scanPage < scanPageCount() - 1, nullptr,
-             scanPage > 0, 128);
+  drawHeader("WI-FI SCAN (2.4GHz only)", scanPage < scanPageCount() - 1, nullptr,
+             scanPage > 0);
   if (scanning || netCount == 0) {
     tft.setTextColor(colBgTxt);
     tft.setTextDatum(MC_DATUM);
     tft.setTextSize(2);
-    tft.drawString(scanning ? "Scanning for networks..." : "No networks found.", 160, 120);
+    tft.drawString(scanning ? "Scanning for networks..." : "No networks found.", 160, 108);
+    // The RESCAN row stays visible even with an empty list, so the page is
+    // never a dead end.
+    drawListRow(SCAN_PER_PAGE, "RESCAN", "scan again", false);
     drawFooter("");
     return;
   }
@@ -395,6 +433,17 @@ void scanNetworks() {
   delay(50);
   netCount = wifiScanNetworks(nets, SCAN_LIST_MAX, WIFI_MIN_RSSI);
   scanning = false;
+  draw();   // show the results while the link comes back
+  // The scan needed the link down for a reliable result, and the main
+  // loop's 10 s reconnect is paused while Settings is open — so the scan
+  // flow restores the connection itself, with a visible status (otherwise
+  // the user sees OFFLINE for the rest of the session).
+  WifiCreds c = wifiCredentials();
+  setStatus("RECONNECTING...");
+  draw();
+  delay(50);
+  bool up = wifiConnectTo(c.ssid, c.pass);
+  setStatus(up ? "CONNECTED" : "OFFLINE");
   draw();
 }
 
@@ -420,7 +469,7 @@ void joinNet(int i) {
     snprintf(savedSsid, sizeof(savedSsid), "%.31s", nets[i].ssid);
     setStatus("CONNECTED");
     page = PAGE_WIFI;
-    sGrid = 1;      // highlight the NETWORKS row (row 0 is status only)
+    sGrid = 1;      // highlight the SCAN NETWORKS row (row 0 is status only)
     draw();
   } else {
     setStatus("FAILED");
@@ -428,13 +477,80 @@ void joinNet(int i) {
   }
 }
 
-void editCoord(bool isLat) {
+// Manual entry (ADD NETWORK row): type an SSID, then a password. ENTER
+// with an empty password field joins with none, like an open network. On
+// success the credentials are saved to NVS — exactly like joinNet().
+void addNet() {
+  char ssid[WIFI_SSID_MAX + 1] = "";
+  if (keyboardQwerty("ADD NETWORK", "SSID (UP TO 31 CHARS)", ssid,
+                     sizeof(ssid)) != KEY_OK) {
+    draw();
+    return;
+  }
+  if (ssid[0] == 0) { draw(); return; }   // an empty SSID has nothing to join
+  char pass[65] = "";
+  if (keyboardQwerty(ssid, "WIFI PASSWORD (ENTER = BLANK)", pass,
+                     sizeof(pass)) != KEY_OK) {
+    draw();
+    return;
+  }
+  setStatus("JOINING...");
+  draw();
+  delay(50);
+  if (wifiConnectTo(ssid, pass)) {
+    wifiSaveCredentials(ssid, pass);
+    snprintf(savedSsid, sizeof(savedSsid), "%.31s", ssid);
+    setStatus("CONNECTED");
+    sGrid = 1;
+    draw();
+  } else {
+    setStatus("FAILED");
+    draw();
+  }
+}
+
+// WIFI ON/OFF row: off kills the radio (the main loop's auto-reconnect is
+// paused while it is off); on reconnects with the current credentials.
+void toggleRadio() {
+  if (wifiEnabled()) {
+    wifiSetRadio(false);
+    setStatus("");
+    draw();
+  } else {
+    WifiCreds c = wifiCredentials();
+    setStatus("JOINING...");
+    draw();
+    delay(50);
+    setStatus(wifiConnectTo(c.ssid, c.pass) ? "CONNECTED" : "FAILED");
+    draw();
+  }
+}
+
+// RESTORE SAVED NETWORK row: erase user-saved credentials from NVS and connect to
+// the build-time network (local_config.h). A wrong tap costs at most one
+// re-join: the build-time network is exactly what the device boots with.
+void restoreDefault() {
+  wifiForgetCredentials();
+  snprintf(savedSsid, sizeof(savedSsid), "%.31s", WIFI_SSID);
+  setStatus("JOINING...");
+  draw();
+  delay(50);
+  setStatus(wifiConnectTo(WIFI_SSID, WIFI_PASS) ? "CONNECTED" : "FAILED");
+  sGrid = 4;
+  draw();
+}
+
+// tapX is the row tap's x: the keypad opens with the cursor under the digit
+// the finger landed on (coordCursorAt) so the coordinate can be edited in
+// place instead of retyped from scratch.
+void editCoord(bool isLat, int tapX) {
   char num[24];
   snprintf(num, sizeof(num), "%.4f", isLat ? userSettings.lat : userSettings.lon);
+  int cursor = coordCursorAt(isLat ? "LATITUDE: " : "LONGITUDE: ", num, tapX);
   int r = keypadNumeric(isLat ? "LATITUDE" : "LONGITUDE",
-                        isLat ? "-90..90" : "-180..180",
+                        isLat ? "-90..90 · TAP FIELD TO MOVE |" : "-180..180 · TAP FIELD TO MOVE |",
                         num, (int)sizeof(num), 12,
-                        isLat ? -90.0f : -180.0f, isLat ? 90.0f : 180.0f);
+                        isLat ? -90.0f : -180.0f, isLat ? 90.0f : 180.0f, cursor);
   if (r != KEY_OK) { draw(); return; }   // < BACK: original coordinate kept
   float v = strtof(num, nullptr);
   if (v < (isLat ? -90.0f : -180.0f) || v > (isLat ? 90.0f : 180.0f)) { draw(); return; }
@@ -526,7 +642,7 @@ void handleTap(int16_t x, int16_t y) {
         case 2: page = PAGE_TIME;       sGrid = 0; draw(); break;
         case 3: page = PAGE_WIFI;       sGrid = 1; draw();
               // No scan on entry: it runs from the SCAN page (the
-              // NETWORKS button or the RESCAN row) — on demand only.
+              // SCAN NETWORKS row or the RESCAN row) — on demand only.
       }
       break;
     case PAGE_APPEARANCE:
@@ -551,7 +667,7 @@ void handleTap(int16_t x, int16_t y) {
     case PAGE_WEATHER:
       if (r < 0 || r > 1) return;
       sGrid = r;
-      editCoord(r == 0);
+      editCoord(r == 0, x);
       break;
     case PAGE_TIME:
       if (r < 0 || r > 1) return;
@@ -579,11 +695,25 @@ void handleTap(int16_t x, int16_t y) {
       onTzTap(r);
       break;
     case PAGE_WIFI:
-      // Only the NETWORKS row (r == 1) is tappable; the status row above
-      // it (r == 0) is display-only.
-      if (r != 1) return;
-      page = PAGE_SCAN;
-      scanNetworks();
+      // Row 0 is display-only status.
+      if (r < 0 || r > 4) return;
+      sGrid = r;
+      switch (r) {
+        case 1:
+          // The radio is off by the user's choice: a scan must not silently
+          // turn it back on (a join must — explicit intent to connect).
+          if (!wifiEnabled()) {
+            setStatus("TURN WIFI ON");
+            draw();
+            break;
+          }
+          page = PAGE_SCAN;
+          scanNetworks();
+          break;
+        case 2: addNet();             break;
+        case 3: toggleRadio();        break;
+        case 4: restoreDefault();     break;
+      }
       break;
     case PAGE_SCAN:
       if (r == SCAN_PER_PAGE) {        // RESCAN row

@@ -54,9 +54,16 @@ which documents the weather app itself.
   — or still tearing the link down — the scan gets truncated. So
   `wifiScanNetworks()`: `setAutoReconnect(false)` + `disconnect()`, then
   **poll until `WL_DISCONNECTED`** (a blind delay is not enough), 300 ms RF
-  settle, then scan. The device is offline for the ~6 s scan; the 10 s
-  reconnect check in `loop()` restores the link afterwards. This is by
-  design: it happens only inside the Wi-Fi settings flow.
+  settle, then scan. The device is offline for the ~6 s scan; the scan flow
+  in `settings.cpp` restores the link itself once the list is shown (footer
+  `RECONNECTING...`) — the `loop()` 10 s check is paused while Settings is
+  open, so the scan flow owns the reconnect. This is by design: it happens
+  only inside the Wi-Fi settings flow.
+- **A just-deauthenticated AP can be a passive-scan miss** (sometimes absent
+  from the raw results) — so the current network may not appear in the SCAN
+  list right after a scan; it is connected regardless (the scan flow
+  reconnects to the previous credentials). Scan diagnostics go to Serial:
+  `[WIFI] Scan: N raw, M below -90 dBm dropped, K stored`.
 - **Modem sleep off around the scan.** `WiFi.setSleep(false)` — power-save
   delays scan events. It stays off afterwards (plugged-in display; the mA
   cost is negligible).

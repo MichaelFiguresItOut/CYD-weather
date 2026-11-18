@@ -14,6 +14,31 @@ static char sSavedSsid[33];
 static char sSavedPass[64];
 static bool sSavedLoaded = false;
 
+// Radio on/off. Not persisted: a reboot always comes back with Wi-Fi on
+// (the dashboard's default state); "WIFI ON/OFF: OFF" is a session setting.
+static bool sWifiEnabled = true;
+
+bool wifiEnabled() { return sWifiEnabled; }
+
+void wifiSetRadio(bool on) {
+  sWifiEnabled = on;
+  if (!on) {
+    WiFi.setAutoReconnect(false);
+    WiFi.disconnect();
+    WiFi.mode(WIFI_OFF);
+    Serial.println("[WIFI] Radio turned OFF (auto-reconnect paused).");
+  } else {
+    // Mode change re-enables the RF; the connect itself is the caller's
+    // job (a join, or the main loop's 10 s reconnect after settings closes).
+    WiFi.mode(WIFI_STA);
+    // RF/driver settle: a begin() issued immediately after the OFF->STA
+    // switch is dropped by the driver, which made the toggle-on connect
+    // fail its whole 20 s poll and show OFFLINE.
+    delay(300);
+    Serial.println("[WIFI] Radio turned ON (auto-reconnect resumed).");
+  }
+}
+
 static bool loadSavedCreds() {
   // Buffer overload: writes up to bufSize-1 chars + NUL, returns whether the
   // key existed at all.
@@ -52,6 +77,7 @@ void wifiForgetCredentials() {
 //  Connect
 // ---------------------------------------------------------------------------
 bool wifiConnectTo(const char* ssid, const char* pass) {
+  sWifiEnabled = true;   // an explicit connect turns the radio back on
   if (WiFi.status() == WL_CONNECTED) {
     WiFi.disconnect();   // the caller asked for a specific network
   }
@@ -76,6 +102,7 @@ bool wifiConnectTo(const char* ssid, const char* pass) {
 }
 
 bool wifiEnsureConnected() {
+  if (!sWifiEnabled) return false;   // user turned the radio off
   if (WiFi.status() == WL_CONNECTED) return true;
   WifiCreds c = wifiCredentials();
   return wifiConnectTo(c.ssid, c.pass);
@@ -100,10 +127,11 @@ int wifiScanNetworks(WifiScanItem* out, int maxN, int minRssiDbm) {
   // Modem sleep is disabled for the scan (power-save delays scan
   // events); the CYD is a plugged-in display, the mA cost is negligible.
   //
-  // We do NOT reconnect here with the old credentials: the main loop
-  // re-checks connectivity every 10 s (main.cpp) and reconnects on its
-  // own, and wifiConnectTo() re-enables auto-reconnect on the next
-  // connect.
+  // We do NOT reconnect here with the old credentials: the scan flow in
+  // settings.cpp restores the link right after the list is shown (the
+  // main loop's 10 s reconnect is paused while Settings is open).
+  // Callers must also make sure the radio is on: a join re-enables it via
+  // wifiConnectTo(), and the Settings page refuses to scan while it is off.
   if (WiFi.status() == WL_CONNECTED) {
     WiFi.setAutoReconnect(false);
     WiFi.disconnect();
@@ -116,11 +144,11 @@ int wifiScanNetworks(WifiScanItem* out, int maxN, int minRssiDbm) {
   //      (sync, show_hidden, passive, 400 ms/channel, all channels)
   if (n < 0) n = 0;
 
-  int c = 0;
+  int c = 0, droppedRssi = 0;
   for (int i = 0; i < n && c < maxN; i++) {
     const char* s = WiFi.SSID(i).c_str();
     if (s == nullptr || *s == 0) continue;          // hidden
-    if (WiFi.RSSI(i) < minRssiDbm) continue;
+    if (WiFi.RSSI(i) < minRssiDbm) { droppedRssi++; continue; }
     bool dup = false;
     for (int j = 0; j < c; j++) {
       if (strcmp(out[j].ssid, s) == 0) { dup = true; break; }
@@ -140,5 +168,11 @@ int wifiScanNetworks(WifiScanItem* out, int maxN, int minRssiDbm) {
     while (j > 0 && out[j - 1].rssi < t.rssi) { out[j] = out[j - 1]; j--; }
     out[j] = t;
   }
+  // Diagnostics: raw = driver results, dropped = filtered by the RSSI
+  // floor, stored = copied into the caller's list (capped by maxN). If the
+  // user's network is absent from all three, the passive pass itself missed
+  // it (RF), not the filters.
+  Serial.printf("[WIFI] Scan: %d raw, %d below %d dBm dropped, %d stored\n",
+                n, droppedRssi, minRssiDbm, c);
   return c;
 }

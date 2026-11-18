@@ -78,6 +78,9 @@ void waitTouchUp() {
   }
 }
 
+// Where the last field tap landed (x), for keypad cursor placement.
+int fieldTapX = -1;
+
 // One blocking tap: waits for a press, tracks it, returns the pressed key
 // code, or -1 if the finger lifted before reaching a key.
 int pollTap() {
@@ -101,6 +104,12 @@ int pollTap() {
   if (y < 26) {
     if (x < 160) return KEY_BACK;
     if (x >= 260) return KEY_OK;
+  }
+  // The field box (drawField: 8,34,304,24) — cursor placement in BOTH
+  // layouts (the numeric keypad and QWERTY).
+  if (x >= 8 && x < 312 && y >= 34 && y < 58) {
+    fieldTapX = x;
+    return KEY_FIELDTAP;
   }
   return -1;
 }
@@ -141,14 +150,14 @@ void drawHeader(const char* title, const char* action) {
 // Field box + status/label line below it. Does NOT fill the screen — the
 // caller does fillBackground() FIRST, then drawHeader(), then this (the old
 // order of header-then-fill wiped the whole header bar).
-void drawField(const char* text, const char* status, bool err) {
+void drawField(const char* text, const char* status, bool err, int inset = 14) {
   tft.fillRoundRect(8, 34, 304, 24, 5, err ? kErrBg : kFieldBg);
   tft.drawRoundRect(8, 34, 304, 24, 5, err ? kKeyBd : kFieldBd);
   tft.setTextDatum(TL_DATUM);
   tft.setTextSize(2);
   tft.setTextColor(err ? kErrTx : kFieldTx);
-  tft.setClipRect(10, 35, 300, 22);   // long entries (31-char passwords) clip inside the box
-  tft.drawString(text, 14, 38);
+  tft.setClipRect(10, 35, 300, 22);   // long entries clip inside the box
+  tft.drawString(text, inset, 38);   // inset < 14 = scrolled long entry
   tft.clearClipRect();
   tft.setTextSize(1);
   tft.setTextColor(kHint);
@@ -185,6 +194,23 @@ void drawKey(const Key& k, const char* label) {
 
 }  // namespace
 
+// Map a tap's x to a character index of s, drawn left to right (built-in
+// font) with the first character's left edge at x0. Per-character widths
+// come out of consecutive textWidth() measurements of the remaining tail.
+// Taps left of the text return 0, taps past the end return strlen(s).
+// (External linkage: settings.cpp uses it for the coordinate rows.)
+int textCharIndexAt(const char* s, int x0, int x, float size) {
+  if (x <= x0) return 0;
+  int n = (int)strnlen(s, 40);
+  int cx = x0;
+  for (int i = 0; i < n; i++) {
+    int w = txtW(s + i, size) - txtW(s + i + 1, size);
+    if (x < cx + w / 2) return i;
+    cx += w;
+  }
+  return n;
+}
+
 // --- QWERTY (Wi-Fi password entry) ------------------------------------------
 
 namespace {
@@ -193,7 +219,7 @@ void buildQwertyKeys(bool shift, bool digits) {
   keyCount = 0;
   if (!digits) {
     // row0: 10 keys w25 (x = 21 + i*28); row1: 9 keys w32 (x = 4 + i*35);
-    // row2: 7 letters + ABC + DEL, all w32 (x = 4 + i*35).
+    // row2: 7 letters + abc + BAK, all w32 (x = 4 + i*35).
     const char* r0 = "QWERTYUIOP";
     const char* r1 = "ASDFGHJKL";
     const char* r2 = "ZXCVBNM";
@@ -209,10 +235,10 @@ void buildQwertyKeys(bool shift, bool digits) {
       char c = shift ? r2[i] : (char)tolower(r2[i]);
       addCharKey(c, 4 + i * 35, 150, 32, (int)c);
     }
-    addWordKey("ABC", 4 + 7 * 35, 150, 32, KEY_SHIFT);   // x249
-    addWordKey("DEL", 4 + 8 * 35, 150, 32, KEY_DEL);     // x284, ends 316
+    addWordKey("abc", 4 + 7 * 35, 150, 32, KEY_SHIFT);   // x249, label drawn dynamically
+    addWordKey("BAK", 4 + 8 * 35, 150, 32, KEY_BAK);     // x284, backspace (left of |)
   } else {
-    // row0: digits w25; rows 1-2: 8 symbols + ABC + DEL, all w28 (x = 6 + i*31).
+    // row0: digits w25; rows 1-2: 8 symbols + ABC + BAK, all w28 (x = 6 + i*31).
     const char* d0 = "1234567890";
     const char* s1 = "-.@#$%&!?";
     const char* s2 = ":;,()/'\"";
@@ -223,14 +249,14 @@ void buildQwertyKeys(bool shift, bool digits) {
     for (int i = 0; i < 8; i++)
       addCharKey(s2[i], 6 + i * 31, 150, 28, (int)s2[i]);
     addWordKey("ABC", 6 + 8 * 31, 150, 28, KEY_123);     // x254: back to letters
-    addWordKey("DEL", 6 + 9 * 31, 150, 28, KEY_DEL);     // x285, ends 313
+    addWordKey("BAK", 6 + 9 * 31, 150, 28, KEY_BAK);     // x285, ends 313
   }
-  // Bottom row (centered): "ABC" toggles shift in letter mode and returns
-  // to letters in digit mode; "123" switches to the symbol/digit page.
-  addWordKey("ABC", 21,  184, 54, digits ? KEY_123 : KEY_SHIFT);
-  addWordKey("123", 78,  184, 54, KEY_123);
-  addWordKey("SPACE", 135, 184, 90, ' ');
-  addWordKey("DEL", 228, 184, 71, KEY_DEL);
+  // Bottom row, identical in both modes (no duplicated labels): 123 swaps
+  // the letter/symbol pages, SPACE inserts a space, DEL deletes right of
+  // the cursor. BAK (backspace, left of the cursor) lives in row 2.
+  addWordKey("123",   21,  184, 54,  KEY_123);
+  addWordKey("SPACE", 78,  184, 90,  ' ');
+  addWordKey("DEL",   171, 184, 128, KEY_DEL);
 }
 
 }  // namespace
@@ -240,11 +266,35 @@ int keyboardQwerty(const char* title, const char* label, char* buf, int bufSize)
   bool shift = true;
   bool digits = false;
   buildQwertyKeys(shift, digits);
+  // Same cursor model as the numeric keypad: a static "|" in the field,
+  // field taps move it (KEY_FIELDTAP), printable keys insert AT the cursor,
+  // BAK deletes the character LEFT of it, DEL the character RIGHT of it.
+  int cur = (int)strnlen(buf, bufSize);   // start at the end (buffers open empty)
+  int scroll = 0;                          // px scrolled left, used for field taps
 
   auto redraw = [&]() {
     fillBackground();
     drawHeader(title, "ENTER");
-    drawField(buf, label, false);
+    char disp[80];
+    int n = (int)strnlen(buf, bufSize);
+    if (cur > n) cur = n;
+    memcpy(disp, buf, cur);
+    disp[cur] = '|';
+    memcpy(disp + cur + 1, buf + cur, n - cur + 1);   // rest incl. NUL
+    // Scroll only when the entry does not fit the 300 px field:
+    // 31-char SSIDs and 64-char passwords otherwise hide the cursor.
+    int scrollMax = txtW(disp, 2.0f) - 280;
+    if (scrollMax > 0) {
+      char pre[80];
+      memcpy(pre, disp, cur);
+      pre[cur] = 0;
+      scroll = 14 + txtW(pre, 2.0f) - 160;   // center the cursor in the field
+      if (scroll < 0) scroll = 0;
+      if (scroll > scrollMax) scroll = scrollMax;
+    } else {
+      scroll = 0;
+    }
+    drawField(disp, label, false, 14 - scroll);
     for (int i = 0; i < keyCount; i++) {
       const char* L = (keys[i].code == KEY_SHIFT) ? (shift ? "abc" : "ABC") : nullptr;
       drawKey(keys[i], L);
@@ -271,37 +321,57 @@ int keyboardQwerty(const char* title, const char* label, char* buf, int bufSize)
       redraw();
       continue;
     }
-    if (code == KEY_DEL) {
-      size_t len = strnlen(buf, bufSize);
-      if (len > 0) {
-        buf[len - 1] = 0;
-        redraw();
-      }
+    if (code == KEY_FIELDTAP) {
+      cur = textCharIndexAt(buf, 14 - scroll, fieldTapX, 2.0f);   // 14 = field text inset
+      redraw();
       continue;
     }
-    // Printable key (digit, space or symbol).
-    if ((code >= '0' && code <= '9') || (code >= 32 && code < 128)) {
-      size_t len = strnlen(buf, bufSize);
+    size_t len = strnlen(buf, bufSize);
+    bool changed = false;
+    if (code == KEY_BAK) {            // backspace: character LEFT of the cursor
+      if (cur > 0) {
+        memmove(buf + cur - 1, buf + cur, len - cur + 1);
+        buf[len - 1] = 0;
+        cur--;
+        changed = true;
+      }
+    } else if (code == KEY_DEL) {     // delete: character RIGHT of the cursor
+      if (cur < (int)len) {
+        memmove(buf + cur, buf + cur + 1, len - cur);
+        buf[len - 1] = 0;
+        changed = true;
+      }
+    } else if ((code >= '0' && code <= '9') || (code >= 32 && code < 128)) {
+      // Printable key (digit, space or symbol) — inserted AT the cursor.
       if (len + 1 < bufSize) {
-        buf[len] = (char)code;
-        buf[len + 1] = 0;
-        redraw();
+        memmove(buf + cur + 1, buf + cur, len - cur + 1);
+        buf[cur] = (char)code;
+        cur++;
+        changed = true;
       }
     }
+    if (changed) redraw();
   }
   return r;
 }
 
 // --- Numeric keypad (latitude / longitude) ----------------------------------
 
+// The field shows the buffer with a static "|" cursor. Tapping the field
+// moves the cursor to the tapped position (KEY_FIELDTAP); digits and "-"
+// insert AT the cursor. BAK (backspace) deletes the character to the LEFT
+// of the cursor, DEL deletes the character to the RIGHT — so a coordinate
+// can be edited in place instead of retyped from scratch.
+// initCursor is the starting index (the digit the finger tapped on the
+// settings row, see coordCursorAt()) or -1 for the end of the number.
 int keypadNumeric(const char* title, const char* hint, char* buf, int bufSize,
-                  int maxLen, float minV, float maxV) {
+                  int maxLen, float minV, float maxV, int initCursor) {
   waitTouchUp();
 
   keyCount = 0;
-  const int KX = 6, G = 6;
+  const int KX = 6, G = 6, G5 = 4;
   const int CW = (320 - 2 * KX - 2 * G) / 3;      // 3 cols: 102
-  const int CW4 = (320 - 2 * KX - 3 * G) / 4;     // 4 cols: 73
+  const int CW5 = (320 - 2 * KX - 4 * G5) / 5;    // 5 cols: 58 (bottom row)
   const int R1Y = 72, R4Y = 180;   // rows 2-3 fall out of R1Y + row*(KEY_H+G)
 
   for (int i = 0; i < 9; i++) {
@@ -309,10 +379,15 @@ int keypadNumeric(const char* title, const char* hint, char* buf, int bufSize,
     char d = (char)('1' + i);
     addCharKey(d, KX + col * (CW + G), R1Y + row * (KEY_H + G), CW, (int)d);
   }
-  addWordKey("DEL", KX,        R4Y, CW4, KEY_DEL);
-  addCharKey('-',  KX + (CW4 + G),  R4Y, CW4, (int)'-');
-  addCharKey('0',  KX + 2 * (CW4 + G), R4Y, CW4, (int)'0');
-  addCharKey('.',  KX + 3 * (CW4 + G), R4Y, CW4, (int)'.');
+  addWordKey("BAK", KX,               R4Y, CW5, KEY_BAK);  // backspace (left of cursor)
+  addWordKey("DEL", KX + (CW5 + G5),  R4Y, CW5, KEY_DEL);  // delete right of cursor
+  addCharKey('-',  KX + 2 * (CW5 + G5), R4Y, CW5, (int)'-');
+  addCharKey('0',  KX + 3 * (CW5 + G5), R4Y, CW5, (int)'0');
+  addCharKey('.',  KX + 4 * (CW5 + G5), R4Y, CW5, (int)'.');
+
+  int len0 = (int)strnlen(buf, bufSize);
+  int cur = (initCursor < 0) ? len0 : initCursor;
+  if (cur > len0) cur = len0;
 
   char statusText[48];
   snprintf(statusText, sizeof(statusText), "%s", hint);
@@ -321,7 +396,14 @@ int keypadNumeric(const char* title, const char* hint, char* buf, int bufSize,
   auto redraw = [&]() {
     fillBackground();
     drawHeader(title, "ENTER");
-    drawField(buf, statusText, err);
+    // Field text with the static "|" cursor (maxLen 12 -> fits the 300 px clip).
+    char disp[40];
+    int n = (int)strnlen(buf, bufSize);
+    if (cur > n) cur = n;
+    memcpy(disp, buf, cur);
+    disp[cur] = '|';
+    memcpy(disp + cur + 1, buf + cur, n - cur + 1);   // rest incl. NUL
+    drawField(disp, statusText, err);
     for (int i = 0; i < keyCount; i++) drawKey(keys[i], nullptr);
   };
   redraw();
@@ -331,6 +413,11 @@ int keypadNumeric(const char* title, const char* hint, char* buf, int bufSize,
     int code = pollTap();
     if (code < 0) continue;
     if (code == KEY_BACK) { r = KEY_BACK; break; }   // discard: keep original
+    if (code == KEY_FIELDTAP) {
+      cur = textCharIndexAt(buf, 14, fieldTapX, 2.0f);   // 14 = field text inset
+      redraw();
+      continue;
+    }
     if (code == KEY_OK) {
       float v = strtof(buf, nullptr);
       // A lone "-" parses as 0 — reject it explicitly.
@@ -344,22 +431,34 @@ int keypadNumeric(const char* title, const char* hint, char* buf, int bufSize,
     }
     size_t len = strnlen(buf, bufSize);
     bool changed = false;
-    if (code == KEY_DEL) {
-      if (len > 0) {
+    if (code == KEY_BAK) {            // backspace: character LEFT of the cursor
+      if (cur > 0) {
+        memmove(buf + cur - 1, buf + cur, len - cur + 1);
+        buf[len - 1] = 0;
+        cur--;
+        changed = true;
+      }
+    } else if (code == KEY_DEL) {     // delete: character RIGHT of the cursor
+      if (cur < (int)len) {
+        memmove(buf + cur, buf + cur + 1, len - cur);
         buf[len - 1] = 0;
         changed = true;
       }
     } else if (code == '-') {
-      if (len < 1) {
+      // Only as the very first character (and never doubling an existing
+      // one); the result must still fit maxLen.
+      if (cur == 0 && (len == 0 || buf[0] != '-') && len < maxLen) {
+        memmove(buf + 1, buf, len + 1);   // shift rest incl. NUL
         buf[0] = '-';
-        buf[1] = 0;
+        cur = 1;
         changed = true;
       }
     } else if ((code >= '0' && code <= '9') || code == '.') {
       if (code == '.' && strchr(buf, '.') != nullptr) continue;
       if (len + 1 < bufSize && (int)len < maxLen) {
-        buf[len] = (char)code;
-        buf[len + 1] = 0;
+        memmove(buf + cur + 1, buf + cur, len - cur + 1);
+        buf[cur] = (char)code;
+        cur++;
         changed = true;
       }
     }
