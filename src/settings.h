@@ -10,9 +10,8 @@
 //  shows four tiles:
 //
 //    APPEARANCE   - display theme (4 choices; day/night is automatic)
-//    WEATHER      - manual latitude/longitude (numeric keypad)
-//    TIME & DATE  - timezone list, temperature unit, 12/24-hour clock,
-//                   date line format
+//    LOCATION     - manual latitude/longitude (numeric keypad)
+//    TIME ZONE    - timezone list, daylight saving on/off
 //    WI-FI        - network scan + join (QWERTY keyboard for credentials),
 //                   manual SSID entry, radio on/off, restore the build-time
 //                   network (erases user-saved credentials)

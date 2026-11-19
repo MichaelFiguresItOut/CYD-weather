@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-//  Timezone catalog (Settings -> TIME & DATE -> TIMEZONE)
+//  Timezone catalog (Settings -> TIME ZONE -> zone list)
 //
 //  TimezoneRules (config.h) is a small fixed-size struct — no Tz rules, no TZ
 //  strings: stdOffsetSec/dstOffsetSec in seconds (negative = west of UTC),

@@ -3,9 +3,9 @@
 //  the THEME picker's top bar (touch.cpp routes the tap here).
 //
 //  Pages (row-tap navigation, every page has "< BACK"):
-//    MAIN         – APPEARANCE / WEATHER / TIME & DATE / WI-FI
+//    MAIN         – APPEARANCE / LOCATION / TIME ZONE / WI-FI
 //    APPEARANCE   – theme (cycles 4), °F/°C, 12/24 h, date format
-//    WEATHER      – latitude / longitude (keypadNumeric)
+//    LOCATION     – latitude / longitude (keypadNumeric)
 //    TIME         – time zone (paged list, TZLIST), DST on/off
 //    WIFI         – current network, network scan, manual SSID entry,
 //                   radio on/off, restore build-time network
@@ -269,8 +269,8 @@ void drawMain() {
   drawHeader("SETTINGS", false);
   const char* items[4][2] = {
     { "APPEARANCE",  "theme · units · clock · date" },
-    { "WEATHER",     "location (lat/lon)" },
-    { "TIME & DATE", "time zone · daylight saving" },
+    { "LOCATION",    "location (lat/lon)" },
+    { "TIME ZONE",   "time zone · daylight saving" },
     { "WI-FI",       "networks · join · add" },
   };
   for (int i = 0; i < 4; i++)
@@ -294,7 +294,7 @@ void drawAppearance() {
 
 void drawWeather() {
   tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
-  drawHeader("WEATHER", false);
+  drawHeader("LOCATION", false);
   char lat[24], lon[24];
   snprintf(lat, sizeof(lat), "LATITUDE: %.4f", userSettings.lat);
   snprintf(lon, sizeof(lon), "LONGITUDE: %.4f", userSettings.lon);
@@ -306,7 +306,7 @@ void drawWeather() {
 
 void drawTime() {
   tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
-  drawHeader("TIME & DATE", false);
+  drawHeader("TIME ZONE", false);
   char tz[40];
   fitText(userSettings.timezone.name, 2, 200, tz, sizeof(tz));
   drawListRow(0, "TIME ZONE", tz, sGrid == 0);

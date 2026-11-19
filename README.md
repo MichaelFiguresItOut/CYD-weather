@@ -289,8 +289,8 @@ Main page: four section tiles.
 | Section | Rows | Behavior |
 |---|---|---|
 | APPEARANCE | THEME, TEMPERATURE, CLOCK, DATE | all four rows tap-to-cycle (theme cycles the 4 themes; the others toggle) |
-| WEATHER | LATITUDE, LONGITUDE | tap a row → blocking numeric keypad (range-checked; `< BACK` discards, original kept); the keypad opens with the `|` cursor under the digit the finger tapped on the row (tapping the field moves it), digits insert at the cursor, BAK backspaces left of it and DEL deletes right of it — so a coordinate can be fixed in place; sets `locationMode` MANUAL |
-| TIME & DATE | TIME ZONE, DAYLIGHT SAVING | TIME ZONE opens the paginated list (5 zones/page, `<` / `>` header arrows, `PAGE n/N` footer; opens on the page holding the current zone); DAYLIGHT SAVING toggles DST (on = +1 h during the DST window; off = `dstOffsetSec == stdOffsetSec`, window ignored) |
+| LOCATION | LATITUDE, LONGITUDE | tap a row → blocking numeric keypad (range-checked; `< BACK` discards, original kept); the keypad opens with the `|` cursor under the digit the finger tapped on the row (tapping the field moves it), digits insert at the cursor, BAK backspaces left of it and DEL deletes right of it — so a coordinate can be fixed in place; sets `locationMode` MANUAL |
+| TIME ZONE | TIME ZONE, DAYLIGHT SAVING | TIME ZONE opens the paginated list (5 zones/page, `<` / `>` header arrows, `PAGE n/N` footer; opens on the page holding the current zone); DAYLIGHT SAVING toggles DST (on = +1 h during the DST window; off = `dstOffsetSec == stdOffsetSec`, window ignored) |
 | WI-FI | CURRENT NETWORK (status), SCAN NETWORKS (scan/join), ADD NETWORK (manual entry), WIFI ON/OFF (power), RESTORE SAVED NETWORK (build-time network) | see below |
 
 - **Wi-Fi flow** (see also `src/wifi_conn.{h,cpp}` and the scan requirements in
@@ -395,3 +395,126 @@ log from t=0 (a plain port open does NOT reliably reset this board, verified
   time, `DNS failed`, HTTP code) — an explicit `DNS failed` distinguishes DNS
   from TCP/TLS when a fetch returns -1.
 - Boot-time `[SD]` / `[DOG]` lines: see the Dog outfit images section.
+
+## CYD location and weather system — actionable roadmap
+
+### Phase 1 — Postal code and coordinate-based location management
+
+**Goal:** Allow the user to configure and change the device's weather location.
+
+Pi implements:
+
+- Expand the existing LOCATION settings page.
+- Add a postal code entry option.
+- Support US ZIP, ZIP+4, and international postal codes.
+- Integrate Open-Meteo Geocoding API to resolve postal codes into coordinates.
+- If multiple matches are returned, allow the user to select the correct location.
+- Add separate latitude and longitude editing options using the existing or a suitable numeric keypad.
+- Display the currently configured location as a readable place name and coordinates.
+- Save the selected location and postal code in NVS.
+- Set `locationMode` to MANUAL whenever the user selects or edits a location.
+- Ensure incomplete or invalid coordinates cannot be applied.
+
+**Deliverable:** A working location settings page where users can enter a postal code or coordinates, save the location, and see it reflected on the dashboard.
+
+### Phase 2 — Automatic and manual timezone management
+
+**Goal:** Make timezone behavior respond correctly to location changes.
+
+Pi implements:
+
+- Retrieve the timezone associated with the configured coordinates.
+- Use that timezone when `timezoneMode` is AUTOMATIC.
+- Preserve existing manual timezone selection.
+- When the user changes location, refresh the timezone only if its mode is AUTOMATIC.
+- When the user selects a timezone manually, set `timezoneMode` to MANUAL.
+- Persist manual timezone rules in NVS.
+- Handle timezone changes, daylight saving time, and NTP synchronization correctly.
+
+**Deliverable:** Changing the configured location updates the device's local time automatically unless the user has explicitly selected a timezone.
+
+### Phase 3 — Weather station discovery
+
+**Goal:** Find available weather observation stations near the configured location.
+
+Pi implements:
+
+- Integrate the NWS `/points/{latitude},{longitude}` endpoint.
+- Retrieve the associated observation stations.
+- Calculate or retrieve their distances from the configured location.
+- Identify stations with usable observation capabilities.
+- Retrieve the latest observation from candidate stations.
+- Determine whether observations are sufficiently recent to be useful.
+- Present a list of stations with their names, IDs, distances, and observation freshness.
+
+**Deliverable:** A working station discovery page showing nearby weather stations and useful information about each.
+
+### Phase 4 — Weather station selection and persistence
+
+**Goal:** Let users choose which stations supply their current weather observations.
+
+Pi implements:
+
+- Automatically select the closest suitable station.
+- Allow the user to select or deselect stations.
+- Support multiple selected stations.
+- Establish an explicit priority order.
+- Save station selections and their priority order in NVS.
+- Reload the saved selections when the device boots.
+- Allow the user to rediscover stations when changing location.
+
+Multiple stations are fallback candidates, not sources to average together. The first station is primary; subsequent stations are tried if the primary station is unavailable or its observations are stale or incomplete.
+
+**Deliverable:** Users can manage their preferred weather stations, and their selections survive reboots.
+
+### Phase 5 — Integrate NWS observations into the weather dashboard
+
+**Goal:** Use the selected stations for current conditions while retaining Open-Meteo forecasts.
+
+Pi implements:
+
+- Retrieve current observations from the selected stations in priority order.
+- Use the first station with sufficiently fresh and usable data.
+- Fall back to the next selected station when necessary.
+- Fall back to Open-Meteo if no selected station provides usable data.
+- Continue using Open-Meteo for forecasts.
+- Map NWS observation fields into the existing weather data structures.
+- Preserve existing weather icons, descriptions, temperature units, and dashboard behavior.
+- Ensure the dog-outfit chart uses the intended current weather values.
+
+**Deliverable:** The dashboard uses nearby station observations for current conditions and Open-Meteo for forecasts, with automatic fallback.
+
+### Phase 6 — Improve location and station management
+
+**Goal:** Make the system convenient to use when moving the device.
+
+Pi implements:
+
+- Add a way to refresh the station list for the current location.
+- Add a way to change the configured location without losing unrelated settings.
+- When location changes, invalidate the old station selections and discover stations for the new location.
+- Make it clear which station is currently supplying observations.
+- Display when data is stale or when the system has fallen back to another source.
+- Handle offline conditions without blocking the dashboard.
+
+**Deliverable:** A location and station management experience that works when moving the CYD between places such as NYC and NJ.
+
+### Phase 7 — Multiple saved location profiles
+
+**Goal:** Allow users to switch between frequently used locations.
+
+Pi implements:
+
+- Support up to three saved locations initially.
+- Each profile stores:
+  - Location name.
+  - Postal code, if provided.
+  - Latitude and longitude.
+  - Selected station IDs.
+  - Station priority order.
+- Add an interface to save, select, rename, and delete profiles.
+- Restore the selected profile's location and station preferences.
+- Recalculate automatic timezone when switching profiles.
+- Preserve a manually selected timezone according to the existing timezone mode behavior.
+
+**Deliverable:** Users can switch between saved locations without re-entering coordinates or configuring stations again.
