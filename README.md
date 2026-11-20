@@ -426,21 +426,51 @@ Pi implements:
 
 **Deliverable:** A working location settings page where users can enter a postal code or coordinates, save the location, and see it reflected on the dashboard.
 
-### Phase 2 — Automatic and manual timezone management
+### Phase 2A — Automatic timezone from the saved location (done)
 
-**Goal:** Make timezone behavior respond correctly to location changes.
+**Goal:** Determine the device's timezone automatically from the configured
+coordinates, with no manual selection required.
+
+Implemented (commit `d70913c`):
+
+- Every Open-Meteo fetch is made with `timezone=auto`; the response reports
+  the IANA zone for the coordinates (top-level `timezone` field).
+- That IANA id is mapped to the catalog zone with matching real-world rules
+  (`IANA_MAP` in `src/timezones.h`; ids whose rules don't match, e.g.
+  `America/Phoenix` — no DST — are unsupported).
+- The mapped zone is applied as the automatic timezone
+  (`applyAutoTimezoneFromIana` in `src/config.cpp`) whenever the mode allows
+  automatic (UNCONFIGURED or AUTOMATIC). MANUAL is never overwritten; an
+  unsupported id keeps the last valid rules.
+- Manual selection already sets `timezoneMode` to MANUAL and persists the
+  rules in NVS (settings app) — preserved unchanged.
+- Settings app: red CLEAR / RESET buttons on the LOCATION, TIME ZONE and WI-FI
+  pages with a confirmation page; the TIME ZONE reset returns the mode to
+  AUTOMATIC so the next weather update re-resolves it from the saved location.
+
+**Deliverable:** Changing the configured location updates the device's local
+time automatically on the next weather update, unless the user has explicitly
+selected a timezone.
+
+### Phase 2B — Timezone correctness and visibility (remaining)
+
+**Goal:** Verify the end-to-end timezone behavior and surface the one case the
+device currently handles silently.
 
 Pi implements:
 
-- Retrieve the timezone associated with the configured coordinates.
-- Use that timezone when `timezoneMode` is AUTOMATIC.
-- Preserve existing manual timezone selection.
-- When the user changes location, refresh the timezone only if its mode is AUTOMATIC.
-- When the user selects a timezone manually, set `timezoneMode` to MANUAL.
-- Persist manual timezone rules in NVS.
-- Handle timezone changes, daylight saving time, and NTP synchronization correctly.
+- Verify: changing the location re-resolves the timezone on the next weather
+  update only while the mode is AUTOMATIC (or UNCONFIGURED); MANUAL is left
+  untouched.
+- Verify: automatic and manual timezone changes stay correct across daylight
+  saving transitions and NTP synchronization (NTP UTC + catalog offsets).
+- Surface unsupported IANA ids: when Open-Meteo reports a zone with no catalog
+  mapping, the device keeps the last valid rules silently — show this on the
+  TIME ZONE page (e.g. "AUTO - unsupported zone") so the user isn't guessing
+  why the time didn't change.
 
-**Deliverable:** Changing the configured location updates the device's local time automatically unless the user has explicitly selected a timezone.
+**Deliverable:** Timezone behavior verified end-to-end (location changes, DST,
+NTP), and the automatic mode's silent case is visible in the UI.
 
 ### Phase 3 — Weather station discovery
 
