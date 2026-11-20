@@ -14,6 +14,9 @@
 //    WIFI         – current network, network scan, manual SSID entry,
 //                   radio on/off, restore build-time network
 //    SCAN         – scan results (tap to join, keyboardQwerty password)
+//    CONFIRM      – CLEAR / RESET confirmation (LOCATION / TIME ZONE /
+//                   WI-FI): < BACK cancels, the red button performs the
+//                   reset and returns to the settings page
 //
 //  "< BACK" on MAIN returns to the THEME picker (the picker's own "< BACK"
 //  then goes to the dashboard). All changes persist immediately via the
@@ -49,7 +52,7 @@
 namespace {
 
 enum Page { PAGE_MAIN, PAGE_APPEARANCE, PAGE_WEATHER, PAGE_TIME,
-            PAGE_TZLIST, PAGE_WIFI, PAGE_SCAN, PAGE_POSTAL };
+            PAGE_TZLIST, PAGE_WIFI, PAGE_SCAN, PAGE_POSTAL, PAGE_CONFIRM };
 
 // --- Geometry (320x240) ------------------------------------------------
 constexpr int HDR_H      = 26;    // blue header bar
@@ -58,6 +61,14 @@ constexpr int BTN_NEXT_X = 260, BTN_NEXT_W = 58;              // ">"  (TZ list, 
 constexpr int BTN_PREV_X = BTN_NEXT_X - BTN_NEXT_W - 4;       // "<"  (TZ list, just left of ">")
 constexpr int ROW_X      = 4, ROW_W = 312;
 constexpr int ROW_Y0     = 34, ROW_H = 36, ROW_GAP = 3;        // up to 5 rows
+// Red CLEAR / RESET button (bottom of the LOCATION / TIME ZONE / WI-FI
+// pages and the confirmation page): full width, fixed height.
+constexpr int RESET_BTN_H  = 28;
+// The WI-FI page uses compact rows (no footer) so the red reset button
+// fits at the bottom of the 240 px screen.
+constexpr int WIFI_ROW_Y0  = 66;
+constexpr int WIFI_ROW_H   = 32;
+constexpr int WIFI_ROW_GAP = 2;
 
 constexpr int TZ_PER_PAGE   = 5;    // TIMEZONES per TIMEZONE list page
 constexpr int SCAN_PER_PAGE = 4;    // networks per SCAN page (row 5 = RESCAN)
@@ -88,6 +99,8 @@ const uint16_t colDim    = C(0x66, 0x75, 0x86);
 const uint16_t colBgTxt  = C(0xf0, 0xf4, 0xf8);   // light text on dark page bg
 const uint16_t colHint   = C(0xa9, 0xb9, 0xcc);   // footer hint on dark bg
 const uint16_t colWarn   = C(0xd4, 0x55, 0x00);
+const uint16_t colDanger   = C(0xc8, 0x2a, 0x2a);   // red CLEAR / RESET buttons
+const uint16_t colDangerBd = C(0x74, 0x15, 0x15);
 
 // Screen state
 int  page = PAGE_MAIN;
@@ -100,6 +113,10 @@ int  netCount = 0;
 WifiScanItem nets[SCAN_LIST_MAX];
 bool scanning = false;
 char wifiMsg[48] = "";        // transient status ("JOINING...", "FAILED", ...)
+// What the confirmation page (PAGE_CONFIRM) is asking about: which section
+// the red CLEAR / RESET button would clear.
+enum ResetTarget { RT_NONE, RT_LOCATION, RT_TIMEZONE, RT_WIFI };
+int  resetTarget = RT_NONE;
 GeoResult geoResults[GEO_PER_PAGE];  // postal-code search results (current page)
 int  geoCount = 0;
 // POSTAL page phase: the page stays up through the whole lookup —
@@ -153,9 +170,17 @@ int coordCursorAt(const char* prefix, const char* num, int x) {
 
 void setStatus(const char* s) { snprintf(wifiMsg, sizeof(wifiMsg), "%s", s); }
 
-// Wi-Fi status line: transient message wins while set, else the live state.
+// Wi-Fi status line: transient message wins while set — paired with the
+// live SSID while connected ("MyNet · CONNECTED") so a successful join or
+// restore names the network it landed on; else the live state.
 void statusText(char* out, int n) {
-  if (wifiMsg[0]) { snprintf(out, n, "%s", wifiMsg); return; }
+  if (wifiMsg[0]) {
+    if (WiFi.status() == WL_CONNECTED)
+      snprintf(out, n, "%s \xC2\xB7 %s", WiFi.SSID().c_str(), wifiMsg);
+    else
+      snprintf(out, n, "%s", wifiMsg);
+    return;
+  }
   if (scanning)   { snprintf(out, n, "SCANNING..."); return; }
   if (WiFi.status() == WL_CONNECTED) { snprintf(out, n, "%s", WiFi.SSID().c_str()); return; }
   snprintf(out, n, "OFFLINE");
@@ -255,10 +280,13 @@ void drawRow(int i, const char* a, const char* b, bool sel) {
   }
 }
 
-void drawListRow(int i, const char* l, const char* value, bool sel, bool warn = false) {
-  int y = ROW_Y0 + i * (ROW_H + ROW_GAP);
-  tft.fillRoundRect(ROW_X, y, ROW_W, ROW_H, 6, sel ? colRowSel : colRowBg);
-  tft.drawRoundRect(ROW_X, y, ROW_W, ROW_H, 6, colRowBd);
+// y < 0 / default h: the standard row i geometry (ROW_Y0 stride). The
+// compact WI-FI rows pass explicit y + WIFI_ROW_H.
+void drawListRow(int i, const char* l, const char* value, bool sel, bool warn = false,
+                 int y = -1, int h = ROW_H) {
+  if (y < 0) y = ROW_Y0 + i * (ROW_H + ROW_GAP);
+  tft.fillRoundRect(ROW_X, y, ROW_W, h, 6, sel ? colRowSel : colRowBg);
+  tft.drawRoundRect(ROW_X, y, ROW_W, h, 6, colRowBd);
   // Left label: size 2 when it fits, else size 1, cut from the END to stay
   // clear of the right-side value (long SSIDs, tz names). TL_DATUM at a
   // fixed inset — an MC_DATUM at x=14 would center the text on the row's
@@ -270,7 +298,8 @@ void drawListRow(int i, const char* l, const char* value, bool sel, bool warn = 
   tft.setTextDatum(TL_DATUM);
   tft.setTextSize(sz);
   tft.setTextColor(warn ? colWarn : colText);
-  tft.drawString(lab, ROW_X + 10, y + (sz == 2 ? 7 : 10));
+  tft.drawString(lab, ROW_X + 10, y + (h == ROW_H ? (sz == 2 ? 7 : 10)
+                                                  : (sz == 2 ? 6 : 9)));
   if (value && value[0]) {
     char val[48];
     int vMax = 308 - (ROW_X + 10 + txtW(lab, sz)) - 8;
@@ -279,8 +308,48 @@ void drawListRow(int i, const char* l, const char* value, bool sel, bool warn = 
     tft.setTextDatum(TR_DATUM);
     tft.setTextSize(1);
     tft.setTextColor(colDim);
-    tft.drawString(val, 308, y + 10);
+    tft.drawString(val, 308, y + (h == ROW_H ? 10 : 9));
   }
+}
+
+// WI-FI page compact rows: top edge of row i (1..4) and the row under y.
+int wifiRowY(int i) { return WIFI_ROW_Y0 + (i - 1) * (WIFI_ROW_H + WIFI_ROW_GAP); }
+int wifiRowAt(int16_t y) {
+  if (y < WIFI_ROW_Y0) return -1;
+  int d   = y - WIFI_ROW_Y0;
+  int i   = d / (WIFI_ROW_H + WIFI_ROW_GAP);
+  int rem = d % (WIFI_ROW_H + WIFI_ROW_GAP);
+  if (i < 0 || i > 3 || rem >= WIFI_ROW_H) return -1;
+  return i + 1;
+}
+
+// Top edge of the red CLEAR / RESET button on the current page (-1: none).
+int resetBtnY() {
+  switch (page) {
+    case PAGE_WEATHER:   // LOCATION: standard rows end at 187, footer below
+    case PAGE_TIME:      // TIME ZONE: rows end at 109
+      return 192;
+    case PAGE_WIFI:      // compact rows end at 200 (no footer on this page)
+      return 204;
+    case PAGE_CONFIRM:
+      return 180;
+    default:
+      return -1;
+  }
+}
+
+// Red CLEAR / RESET button: full-width red pill with a centred label. Same
+// look on the three settings pages and the confirmation page (where it is
+// labelled "RESET / CLEAR").
+void drawResetButton(const char* label) {
+  int y = resetBtnY();
+  if (y < 0) return;
+  tft.fillRoundRect(ROW_X, y, ROW_W, RESET_BTN_H, 6, colDanger);
+  tft.drawRoundRect(ROW_X, y, ROW_W, RESET_BTN_H, 6, colDangerBd);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextSize(2);
+  tft.setTextColor(C(0xFF, 0xFF, 0xFF));
+  tft.drawString(label, ROW_X + ROW_W / 2, y + RESET_BTN_H / 2);
 }
 
 // --- Pages ---------------------------------------------------------------
@@ -346,6 +415,7 @@ void drawWeather() {
   const char* mode = userSettings.locationMode == SettingMode::AUTOMATIC ? "AUTO" : "";
   drawListRow(2, lat, mode, sGrid == 2);
   drawListRow(3, lon, "", sGrid == 3);
+  drawResetButton("CLEAR / RESET");
   drawFooter("TAP A ROW TO EDIT");
 }
 
@@ -386,6 +456,7 @@ void drawTime() {
   drawListRow(0, "TIME ZONE", tz, sGrid == 0);
   bool dst = (userSettings.timezone.dstOffsetSec != userSettings.timezone.stdOffsetSec);
   drawListRow(1, "DAYLIGHT SAVING", dst ? "DST ON" : "DST OFF", sGrid == 1);
+  drawResetButton("CLEAR / RESET");
   drawFooter("TAP TO CHANGE");
 }
 
@@ -410,33 +481,79 @@ void drawTzList() {
 void drawWifi() {
   tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
   drawHeader("WI-FI (2.4GHz only)", false);
-  // Row 0: the connected network as plain status text — deliberately
-  // without the white button styling, and not tappable.
+  // Compact rows (see WIFI_ROW_*) leave room for the red reset button at
+  // the bottom; the page has no footer, so the status line (transient
+  // message first, then the network state) is shown in the row 0 block.
   tft.setTextDatum(TL_DATUM);
   tft.setTextSize(1);
   tft.setTextColor(colDim);
-  tft.drawString("CURRENT NETWORK", ROW_X + 10, ROW_Y0 + 8);
+  tft.drawString("CURRENT NETWORK", ROW_X + 10, 36);
+  char st[64];
+  statusText(st, sizeof(st));
   bool on = (WiFi.status() == WL_CONNECTED);
-  char cur[48], curFit[48];
-  snprintf(cur, sizeof(cur), "%s", on ? WiFi.SSID().c_str() : "OFFLINE");
-  truncText(cur, 2, 280, curFit, sizeof(curFit));
+  char cur[48];
+  truncText(st, 2, 280, cur, sizeof(cur));
   tft.setTextSize(2);
-  tft.setTextColor(on ? C(0xFF, 0xFF, 0xFF) : colHint);
-  tft.drawString(curFit, ROW_X + 10, ROW_Y0 + 22);
-  // Row 1: the one actionable row.
+  tft.setTextColor(wifiMsg[0] || scanning ? colWarn : (on ? C(0xFF, 0xFF, 0xFF) : colHint));
+  tft.drawString(cur, ROW_X + 10, 48);
   char nval[16];
   if (scanning)            snprintf(nval, sizeof(nval), "SCANNING...");
   else if (netCount > 0)   snprintf(nval, sizeof(nval), "%d FOUND", netCount);
   else                     snprintf(nval, sizeof(nval), "TAP TO SCAN");
-  drawListRow(1, "SCAN NETWORKS", nval, sGrid == 1);
-  drawListRow(2, "ADD NETWORK", "TYPE SSID / PASS", sGrid == 2);
+  drawListRow(1, "SCAN NETWORKS", nval, sGrid == 1, false, wifiRowY(1), WIFI_ROW_H);
+  drawListRow(2, "ADD NETWORK", "TYPE SSID / PASS", sGrid == 2, false, wifiRowY(2), WIFI_ROW_H);
   // Row 3: radio power (off is a session setting, not persisted).
-  drawListRow(3, "WIFI ON/OFF", wifiEnabled() ? "ON" : "OFF", sGrid == 3);
+  drawListRow(3, "WIFI ON/OFF", wifiEnabled() ? "ON" : "OFF", sGrid == 3, false, wifiRowY(3), WIFI_ROW_H);
   // Row 4: restore the build-time network (erases user-saved credentials).
   char def[40];
   truncText(WIFI_SSID, 1, 130, def, sizeof(def));
-  drawListRow(4, "RESTORE SAVED NETWORK", def, sGrid == 4);
-  drawFooter("SCAN / ADD / WIFI / RESTORE");
+  drawListRow(4, "RESTORE SAVED NETWORK", def, sGrid == 4, false, wifiRowY(4), WIFI_ROW_H);
+  drawResetButton("CLEAR / RESET");
+}
+
+// Confirmation page behind the red CLEAR / RESET buttons. < BACK (header)
+// returns to the settings page without changing anything; only the red
+// button performs the reset.
+void drawConfirm() {
+  tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
+  const char* title =
+      (resetTarget == RT_LOCATION) ? "CLEAR LOCATION"
+      : (resetTarget == RT_TIMEZONE) ? "RESET TIME ZONE"
+                                     : "RESET WI-FI";
+  drawHeader(title, false);
+
+  const char* lines[5];
+  switch (resetTarget) {
+    case RT_LOCATION:
+      lines[0] = "ERASES: postal code,";
+      lines[1] = "latitude, longitude and";
+      lines[2] = "place name. The location";
+      lines[3] = "becomes UNCONFIGURED.";
+      lines[4] = "Timezone is not changed.";
+      break;
+    case RT_TIMEZONE:
+      lines[0] = "THE TIME ZONE BECOMES";
+      lines[1] = "AUTOMATIC AND FOLLOWS";
+      lines[2] = "YOUR LOCATION, SET ON";
+      lines[3] = "THE NEXT WEATHER UPDATE.";
+      lines[4] = "Your location is kept.";
+      break;
+    default:  // RT_WIFI
+      lines[0] = "ERASES THE SAVED WI-FI";
+      lines[1] = "CREDENTIALS AND JOINS";
+      lines[2] = "THE BUILT-IN DEFAULT";
+      lines[3] = "NETWORK.";
+      lines[4] = "Radio on/off unchanged.";
+      break;
+  }
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextSize(2);
+  for (int i = 0; i < 5; i++) {
+    tft.setTextColor(i < 4 ? C(0xFF, 0xFF, 0xFF) : colHint);
+    tft.drawString(lines[i], 10, 46 + i * 20);
+  }
+  drawResetButton("RESET / CLEAR");
+  drawFooter("PRESS < BACK TO CANCEL");
 }
 
 void drawScan() {
@@ -482,6 +599,7 @@ void draw() {
     case PAGE_TIME:       drawTime();       break;
     case PAGE_TZLIST:     drawTzList();     break;
     case PAGE_WIFI:       drawWifi();       break;
+    case PAGE_CONFIRM:    drawConfirm();    break;
     case PAGE_SCAN:       drawScan();       break;
     case PAGE_POSTAL:     drawPostal();     break;
   }
@@ -612,6 +730,23 @@ void restoreDefault() {
   delay(50);
   setStatus(wifiConnectTo(WIFI_SSID, WIFI_PASS) ? "CONNECTED" : "FAILED");
   sGrid = 4;
+  draw();
+}
+
+// WI-FI reset (confirmation page): erase the user-saved credentials from
+// NVS and return to the built-in defaults (local_config.h). The radio
+// on/off state is preserved: while ON it reconnects to the built-in network
+// now; while OFF the defaults simply take over on the next manual "on".
+void doWifiReset() {
+  wifiForgetCredentials();
+  if (wifiEnabled()) {
+    setStatus("JOINING...");
+    draw();
+    delay(50);
+    setStatus(wifiConnectTo(WIFI_SSID, WIFI_PASS) ? "CONNECTED" : "FAILED");
+  }
+  page = PAGE_WIFI;
+  sGrid = 1;
   draw();
 }
 
@@ -799,6 +934,15 @@ void handleTap(int16_t x, int16_t y) {
       case PAGE_POSTAL:     page = PAGE_WEATHER; sGrid = 1; draw(); break;
       case PAGE_SCAN:       page = PAGE_WIFI;  sGrid = 1; draw(); break;
       case PAGE_WIFI:       page = PAGE_MAIN;  sGrid = 3; draw(); break;
+      case PAGE_CONFIRM: {   // BACK: nothing has been changed yet.
+        int t = resetTarget;
+        resetTarget = RT_NONE;
+        page = (t == RT_TIMEZONE) ? PAGE_TIME
+             : (t == RT_WIFI)     ? PAGE_WIFI : PAGE_WEATHER;
+        sGrid = 0;
+        draw();
+        break;
+      }
     }
     return;
   }
@@ -825,6 +969,38 @@ void handleTap(int16_t x, int16_t y) {
     return;
   }
   if (y < HDR_H) return;
+
+  // Red CLEAR / RESET button (bottom of the LOCATION / TIME ZONE / WI-FI
+  // pages; on the confirmation page it performs the reset and returns to
+  // the settings page).
+  {
+    int by = resetBtnY();
+    if (by >= 0 && x >= ROW_X && x < ROW_X + ROW_W && y >= by && y < by + RESET_BTN_H) {
+      if (page == PAGE_CONFIRM) {
+        switch (resetTarget) {
+          case RT_LOCATION:
+            resetLocation();
+            page = PAGE_WEATHER; sGrid = 0;
+            break;
+          case RT_TIMEZONE:
+            resetTimezone();
+            page = PAGE_TIME; sGrid = 0;
+            break;
+          case RT_WIFI:
+            doWifiReset();    // sets page + sGrid, draws itself
+            break;
+        }
+        resetTarget = RT_NONE;
+        draw();
+      } else {
+        resetTarget = (page == PAGE_WEATHER) ? RT_LOCATION
+                     : (page == PAGE_TIME)   ? RT_TIMEZONE : RT_WIFI;
+        page = PAGE_CONFIRM;
+        draw();
+      }
+      return;
+    }
+  }
 
   int r = rowAt(y);
   switch (page) {
@@ -900,7 +1076,8 @@ void handleTap(int16_t x, int16_t y) {
       onTzTap(r);
       break;
     case PAGE_WIFI:
-      // Row 0 is display-only status.
+      // Compact rows 1..4 (row 0 is display-only status).
+      r = wifiRowAt(y);
       if (r < 0 || r > 4) return;
       sGrid = r;
       switch (r) {
@@ -947,6 +1124,7 @@ void settingsEnterFromPicker() {
   netCount = 0;
   scanning = false;
   geoCount = 0;
+  resetTarget = RT_NONE;
   wifiMsg[0] = 0;
   if (!prefs.getString("ssid", savedSsid, sizeof(savedSsid)))
     savedSsid[0] = 0;

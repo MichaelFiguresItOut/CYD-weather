@@ -3,6 +3,7 @@
 #include <Preferences.h>
 #include <cstring>
 #include "local_config.h"
+#include "timezones.h"
 
 // ---------------------------------------------------------------------------
 //  User settings: defaults = the previously hard-coded behavior.
@@ -209,6 +210,29 @@ void saveTimezone() {
   if (!ok) Serial.println("[CFG] timezone save failed");
 }
 
+// Settings-page reset (LOCATION page confirmation): clear the saved
+// location - coordinates, postal code and place name - and return the
+// location to the UNCONFIGURED state so automatic location (Phase 2A) may
+// detect it later. Nothing is resolved here, and the timezone keys are not
+// touched.
+void resetLocation() {
+  userSettings.lat = 0.0f;
+  userSettings.lon = 0.0f;
+  userSettings.postalCode[0] = 0;
+  userSettings.placeName[0]  = 0;
+  userSettings.locationMode = SettingMode::UNCONFIGURED;
+  saveLocation();
+}
+
+// Settings-page reset (TIME ZONE page confirmation): return the mode to
+// AUTOMATIC. The last valid rules are kept as-is - the next Open-Meteo
+// resolution (Phase 2A, inside fetchWeather) replaces them with the zone
+// for the saved location. The location keys are not touched.
+void resetTimezone() {
+  userSettings.timezoneMode = SettingMode::AUTOMATIC;
+  saveTimezone();
+}
+
 void saveDisplaySettings() {
   if (!nvsOpen) return;
   size_t ok = prefs.putUChar("celsius", userSettings.useCelsius ? 1 : 0);
@@ -251,4 +275,18 @@ bool applyAutoTimezone(const TimezoneRules& tz) {
   Serial.printf("[CFG] auto timezone applied: %s (std %+ds dst %+ds)\n",
                 tz.name ? tz.name : "?", tz.stdOffsetSec, tz.dstOffsetSec);
   return true;
+}
+
+// Phase 2A: the IANA id Open-Meteo reports for the saved coordinates
+// (timezone=auto, e.g. "America/New_York"). Maps it to the catalog zone with
+// matching rules and applies it as the automatic timezone - a no-op under
+// MANUAL mode; an unsupported id leaves the last valid rules in place.
+bool applyAutoTimezoneFromIana(const char* iana) {
+  int idx = timezoneIndexByIana(iana);
+  if (idx < 0) {
+    Serial.printf("[TZ] unsupported IANA id \"%s\" - keeping last valid rules\n",
+                  iana ? iana : "?");
+    return false;
+  }
+  return applyAutoTimezone(TIMEZONES[idx].rules);
 }

@@ -88,6 +88,13 @@ void saveLocation();         // lat/lon + location mode
 void saveTimezone();         // timezone rules + timezone mode
 void saveDisplaySettings();  // temp unit, clock format, date format
 
+// Settings-page resets (confirmation pages): clear the saved NVS values of
+// one section and persist the cleared state. Nothing outside the section
+// is touched.
+void resetLocation();   // lat/lon -> 0, postal code/place name -> "", mode -> UNCONFIGURED
+void resetTimezone();   // mode -> AUTOMATIC; last valid rules kept until the
+                        // next Open-Meteo resolution (Phase 2A)
+
 // Automatic-detection seam for the future geolocation/timezone services:
 // true while the setting may be (re)determined automatically — UNCONFIGURED
 // (first time) or AUTOMATIC (refresh). MANUAL is never overwritten.
@@ -100,6 +107,10 @@ bool timezoneAutoAllowed();
 // pointer in userSettings and copied into NVS on save).
 bool applyAutoLocation(float lat, float lon);
 bool applyAutoTimezone(const TimezoneRules& tz);
+// Phase 2A: IANA id from Open-Meteo (timezone=auto, e.g. "America/New_York")
+// -> catalog zone -> applied as the automatic timezone. No-op under MANUAL
+// mode; an unsupported id keeps the last valid rules.
+bool applyAutoTimezoneFromIana(const char* iana);
 
 // ---------------------------------------------------------------------------
 //  App timing + service constants

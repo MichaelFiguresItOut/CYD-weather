@@ -237,6 +237,15 @@ bool fetchWeather() {
     return false;
   }
 
+  // ---- Phase 2A: automatic timezone from the same request ----
+  // timezone=auto makes Open-Meteo report the IANA zone for the coordinates
+  // (top-level doc["timezone"]). Skipped under MANUAL mode; a failed fetch or
+  // an unsupported id keeps the last valid rules (applyAutoTimezoneFromIana).
+  if (timezoneAutoAllowed()) {
+    const char* iana = doc["timezone"].as<const char*>();
+    if (iana) applyAutoTimezoneFromIana(iana);
+  }
+
   wx.valid        = true;
   wx.temp         = curTemp;
   wx.feelsLike    = curFeels;

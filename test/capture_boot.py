@@ -4,7 +4,9 @@ import serial, sys, time
 
 PORT = "COM4"
 BAUD = 115200
-CAPTURE_S = 9.0
+# Capture window: default 9 s (boot + SD). Pass a longer window (e.g. 40) to
+# also cover WiFi connect + NTP + first weather fetch + dog swap.
+CAPTURE_S = float(sys.argv[1]) if len(sys.argv) > 1 else 9.0
 
 s = serial.Serial(PORT, BAUD, timeout=1)
 time.sleep(0.2)

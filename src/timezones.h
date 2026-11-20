@@ -66,3 +66,36 @@ inline int timezoneIndexByRules(const TimezoneRules& r) {
   }
   return 0;
 }
+
+// Phase 2A: IANA identifiers (Open-Meteo `timezone=auto` response) -> catalog
+// entries. Only ids whose real-world rules match the catalog entry are
+// mapped; everything else (e.g. "America/Phoenix" - no DST, or
+// "America/Anchorage" - no catalog zone) is unsupported, in which case the
+// caller keeps the last valid rules.
+struct IanaMap { const char* iana; int index; };
+static const IanaMap IANA_MAP[] = {
+  { "UTC", 0 }, { "Etc/UTC", 0 },
+  { "America/New_York", 1 }, { "America/Toronto", 1 }, { "America/Detroit", 1 },
+  { "America/Chicago", 2 }, { "America/Winnipeg", 2 },
+  { "America/Denver", 3 }, { "America/Edmonton", 3 },
+  { "America/Los_Angeles", 4 }, { "America/Vancouver", 4 },
+  { "Europe/London", 5 },
+  { "Europe/Berlin", 6 }, { "Europe/Paris", 6 }, { "Europe/Amsterdam", 6 },
+  { "Europe/Brussels", 6 }, { "Europe/Madrid", 6 }, { "Europe/Rome", 6 },
+  { "Europe/Athens", 7 }, { "Europe/Helsinki", 7 }, { "Europe/Sofia", 7 },
+  { "Europe/Bucharest", 7 }, { "Europe/Kyiv", 7 },
+  { "Europe/Moscow", 8 },
+  { "Asia/Kolkata", 9 },
+  { "Asia/Shanghai", 10 }, { "Asia/Hong_Kong", 10 }, { "Asia/Singapore", 10 },
+  { "Asia/Tokyo", 11 }, { "Asia/Seoul", 11 },
+  { "Australia/Sydney", 12 }, { "Australia/Melbourne", 12 },
+  { "Pacific/Auckland", 13 },
+};
+
+// Index of the catalog entry for an IANA id, -1 when unsupported.
+inline int timezoneIndexByIana(const char* iana) {
+  if (!iana) return -1;
+  for (size_t i = 0; i < sizeof(IANA_MAP) / sizeof(IANA_MAP[0]); i++)
+    if (strcmp(iana, IANA_MAP[i].iana) == 0) return IANA_MAP[i].index;
+  return -1;
+}
