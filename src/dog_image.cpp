@@ -177,11 +177,15 @@ bool loadDogImage(const char* path) {
     uint8_t hdr[8];   // length (4 BE) + type (4 ASCII)
     if (!readFull(f, hdr, 8)) break;
     uint32_t len = be32(&hdr[0]);
-    const char* type = (const char*)&hdr[4];
+    // Chunk types are fixed 4-byte fields, NOT null-terminated strings:
+    // compare exactly 4 bytes. (strcmp would read past the 8-byte header
+    // buffer - undefined behavior, and in practice it misidentified chunks,
+    // so IEND was never recognized and every load failed with "no IEND".)
+    const uint8_t* type = &hdr[4];
 
     if (len > 1u * 1024u * 1024u) { ok = false; Serial.println("[DOG] chunk too large"); break; }
 
-    if (strcmp(type, "IHDR") == 0) {
+    if (memcmp(type, "IHDR", 4) == 0) {
       uint8_t d[13];
       if (!readFull(f, d, 13) || len < 13) { ok = false; Serial.println("[DOG] bad IHDR"); break; }
       info.w = (int)be32(&d[0]);
@@ -192,11 +196,11 @@ bool loadDogImage(const char* path) {
       }
       info.colorType = d[9];
       if (info.w < 1 || info.h < 1 || info.w > 512 || info.h > 512) { ok = false; Serial.println("[DOG] bad image size"); break; }
-    } else if (strcmp(type, "PLTE") == 0) {
+    } else if (memcmp(type, "PLTE", 4) == 0) {
       if (len > sizeof(palette)) { ok = false; Serial.println("[DOG] palette too large"); break; }
       if (!readFull(f, palette, len)) { ok = false; Serial.println("[DOG] read error in PLTE"); break; }
       havePalette = true;
-    } else if (strcmp(type, "IDAT") == 0) {
+    } else if (memcmp(type, "IDAT", 4) == 0) {
       if (idatLen + len > idatCap) {
         uint8_t* nb = (uint8_t*)realloc(idat, idatLen + len);   // exact growth
         if (!nb) { ok = false; Serial.println("[DOG] out of memory"); break; }
@@ -204,7 +208,7 @@ bool loadDogImage(const char* path) {
       }
       if (!readFull(f, idat + idatLen, len)) { ok = false; Serial.println("[DOG] read error in IDAT"); break; }
       idatLen += len;
-    } else if (strcmp(type, "IEND") == 0) {
+    } else if (memcmp(type, "IEND", 4) == 0) {
       iend = true;   // done after consuming the CRC below
     } else {
       if (!skip(f, len)) { ok = false; Serial.println("[DOG] read error skipping chunk"); break; }
