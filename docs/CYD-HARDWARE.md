@@ -197,6 +197,21 @@ PNGs needs (`src/dog_image.cpp`; verified pixel-exact by `test/test_decoder.py`)
   buffers. Color types 0, 2, 3, 6 supported; interlaced PNGs rejected. Images
   larger than the 96x128 corner zone are area-averaged down to fit (all outfits
   are exactly 95x128 → no scaling). Decoded buffers: ~24 KB in RAM.
+- **Chunk-type comparison — hard-learned (2026-11-20, cost a whole debug session)**:
+  PNG chunk types are fixed 4-byte fields, NOT C strings. The decoder must use
+  `memcmp(type, "IHDR", 4)` etc. The decoder had carried
+  `strcmp((const char*)&hdr[4], ...)` since the code was ported from the GitHub
+  project: that reads PAST the 8-byte `hdr`
+  buffer (undefined behavior) and only stops at a coincidental NUL. On the
+  2026-11-20 build every comparison returned non-zero, so IEND was never
+  recognized and every load failed with "[DOG] no IEND" — while the files were
+  valid and the card worked. The failure was misread as marginal SD contact and
+  then as compiler codegen: the walk's exit check `if (!ok || !iend)` was
+  disassembled twice and was correct both times (the compiler was innocent). A
+  one-line switch to `memcmp` fixed it. Two takeaways: (1) fixed-length binary
+  fields are never compared as C strings; (2) before blaming the compiler, look
+  at the actual instructions in `firmware.elf` — a misdiagnosed codegen bug
+  burned a day, the real bug was a textbook UB read.
 - **Alpha compositing at draw time** (`compositeRow()`): the outfits have
   transparent backgrounds, so pixels are NOT flattened onto white at decode
   time. `drawDogBox()` pushes one row at a time, and ONLY the opaque span of
@@ -218,7 +233,13 @@ PNGs needs (`src/dog_image.cpp`; verified pixel-exact by `test/test_decoder.py`)
   The TFT owns VSPI (SPI3), so the SD card gets a dedicated
   `SPIClass sdSpi(HSPI)` instance: `sdSpi.begin(18, 19, 23);` then
   `SD.begin(5, sdSpi, 16000000);` — do NOT use plain `SD.begin()` (it would grab
-  the global VSPI and fight the display).
+  the global VSPI and fight the display). SPI clock is 16 MHz; verified on
+  2026-11-20 (SD init + all dog image loads succeed). History: on 2026-11-19
+  mid-file reads failed systematically at 16 MHz (init OK, first ~1KB OK, then
+  EOF on every file); a 4 MHz "extra margin" experiment did not fix it and
+  correlated with failing boots, so 16 MHz was kept. The failures look like
+  marginal card contact rather than clock rate — the 3× `SD.begin()` / 3× load
+  retries in `weatherInitSdAndDog()` are the mitigation.
 - **Image pixels go through BOTH panel quirks** (this cost a debugging session):
   1. Panel inversion: displayed = ~written, same as all other drawing.
   2. LGFX v1 `pushImage(x,y,w,h,const uint16_t*)` with `_swapBytes=false`

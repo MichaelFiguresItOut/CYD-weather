@@ -58,6 +58,13 @@ current weather. One of 17 RGBA PNGs on the SD card root is selected by
   alpha), row-wise alpha compositing, SD wiring, and the byte-swap/inversion quirks:
   see `docs/CYD-HARDWARE.md` ("SD card PNG pipeline"). `test/test_decoder.py` verifies
   the pipeline is pixel-exact against PIL.
+- **Chunk-type comparison trap (hard-learned, 2026-11-20)**: PNG chunk names are
+  fixed 4-byte fields, **not null-terminated strings** — the decoder must compare them
+  with `memcmp(type, "IHDR", 4)`, never `strcmp()`. The old `strcmp()` read past the
+  8-byte header buffer (undefined behavior) and on the 2026-11-20 build every
+  comparison failed, so IEND was never recognized and *every* load died with
+  `[DOG] no IEND` — with valid files on a working card. If a dog image suddenly fails
+  with `no IEND`, suspect the chunk comparison before the card contact.
 
 - **Layout zone**: image drawn at `(width - w - 4, height - h - 4)`; full-size
   95x128 → corner (221,108)-(315,235). `textZoneRight()` = left edge of the image
