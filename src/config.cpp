@@ -15,6 +15,8 @@ UserSettings userSettings = {
   LOC_LAT,                  // site latitude (local_config.h)
   LOC_LON,                  // site longitude (local_config.h)
   SettingMode::MANUAL,      // existing behavior: built-for-site values
+  "",                       // postalCode: set on the LOCATION page; may be blank
+  "",                       // placeName: resolved by geocoding; may be blank
   TIMEZONE_US_EASTERN,      // US Eastern, US DST rules
   SettingMode::MANUAL,      // existing behavior: built-for-site timezone
   THEME_BASIC,              // default; loadSettings() overwrites with the persisted value
@@ -30,6 +32,8 @@ UserSettings userSettings = {
 //   "locMode" u8    SettingMode of the weather location
 //   "lat"     f32   weather latitude
 //   "lon"     f32   weather longitude
+//   "postcode" str  postal code entered on the LOCATION page ("" = none)
+//   "placename" str resolved location display name ("" = not resolved)
 //   "tzMode"  u8    SettingMode of the timezone
 //   "tzName"  str   timezone display name (informational)
 //   "tzStd"   i32   standard-time offset, seconds
@@ -101,8 +105,17 @@ static void loadLocationPart() {
   if (!validLatLon(lat, lon)) { lat = LOC_LAT; lon = LOC_LON; }
   userSettings.lat = lat;
   userSettings.lon = lon;
-  Serial.printf("[CFG] location: mode=%d lat=%.4f lon=%.4f\n",
-                (int)userSettings.locationMode, lat, lon);
+  // Postal code / resolved name: "" if never saved (isKey avoids the NVS
+  // not-found log, same pattern as the timezone name).
+  userSettings.postalCode[0] = 0;
+  if (prefs.isKey("postcode"))
+    prefs.getString("postcode", userSettings.postalCode, sizeof(userSettings.postalCode));
+  userSettings.placeName[0] = 0;
+  if (prefs.isKey("placename"))
+    prefs.getString("placename", userSettings.placeName, sizeof(userSettings.placeName));
+  Serial.printf("[CFG] location: mode=%d lat=%.4f lon=%.4f code=\"%s\" place=\"%s\"\n",
+                (int)userSettings.locationMode, lat, lon,
+                userSettings.postalCode, userSettings.placeName);
 }
 
 static void loadTimezonePart() {
@@ -175,6 +188,8 @@ void saveLocation() {
   size_t ok = prefs.putUChar("locMode", (uint8_t)userSettings.locationMode);
   if (ok) ok = prefs.putFloat("lat", userSettings.lat);
   if (ok) ok = prefs.putFloat("lon", userSettings.lon);
+  if (ok) ok = prefs.putString("postcode", userSettings.postalCode);
+  if (ok) ok = prefs.putString("placename", userSettings.placeName);
   if (!ok) Serial.println("[CFG] location save failed");
 }
 

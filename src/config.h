@@ -54,6 +54,10 @@ struct UserSettings {
   float lat;                      // weather location (Open-Meteo); default from local_config.h
   float lon;                      // weather location (Open-Meteo); default from local_config.h
   SettingMode locationMode;       // how lat/lon were chosen
+  char postalCode[12];            // postal code entered on the LOCATION page
+                                  // (US ZIP, ZIP+4, or international code); "" = none
+  char placeName[56];             // resolved location display ("City, Region,
+                                  // Country") from geocoding; "" = not resolved
   TimezoneRules timezone;         // local timezone + DST rules; default US Eastern
   SettingMode timezoneMode;       // how the timezone was chosen
   int  theme;                     // selected theme (0..THEME_COUNT-1)
