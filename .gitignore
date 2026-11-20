@@ -26,3 +26,6 @@ docs/FIRMWARE_REFACTOR_SPEC.md
 
 # Theme design mockups (historical artifacts — themes are final; kept local only)
 mockups/
+
+# Local-only diagnostics (hardcoded machine paths, not portable)
+test/check_sd_card.ps1
