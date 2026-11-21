@@ -403,7 +403,8 @@ static void renderTheme1Legacy(const T& t) {   // SKY - original bitmap-font lay
   drawFeelsChip(t, 14, 162, 204, 30, p.fBg, p.fBd, 1.25f, p.fLbl, feels, 2.25f, p.fVal);
 
   char rain[48]; buildRainLine(rain, sizeof(rain));
-  bool rainy = wx.valid && (wx.rainingNow || wx.rainNearby || wx.nextRain[0]);
+  // Same predicate as buildRainLine(): umbrella shows iff the text reports rain.
+  bool rainy = wx.valid && (wx.rainingNow || (wx.rainNearby && wx.nearbyStns[0]) || wx.nextRain[0]);
   uint16_t iconC = rainy ? (nightMode() ? C(0x7c,0xc0,0xff) : C(0x2f,0x7f,0xd0))   // umbrella
                          : (wx.valid    ? p.rDot : C(0x9d,0xb4,0xc8));             // yellow circle / neutral dot
   drawRainChip(t, 14, 198, 204, 28, p.rBg, p.rBd, rain, 1.6f, p.rTxt, iconC, rainy);
@@ -455,7 +456,8 @@ static void renderTheme1(const T& t) {   // SKY - Nunito BFF fonts
 
   // Rain chip (em13).
   char rain[48]; buildRainLine(rain, sizeof(rain));
-  bool rainy = wx.valid && (wx.rainingNow || wx.rainNearby || wx.nextRain[0]);
+  // Same predicate as buildRainLine(): umbrella shows iff the text reports rain.
+  bool rainy = wx.valid && (wx.rainingNow || (wx.rainNearby && wx.nearbyStns[0]) || wx.nextRain[0]);
   uint16_t iconC = rainy ? (nightMode() ? C(0x7c,0xc0,0xff) : C(0x2f,0x7f,0xd0))   // umbrella
                          : (wx.valid    ? p.rDot : C(0x9d,0xb4,0xc8));             // yellow circle / neutral dot
   gT->fillRoundRect(t.X(14), t.Y(198), max(2, t.W(204)), max(2, t.H(28)), (int)(8 * t.sx + 0.5f), p.rBg);

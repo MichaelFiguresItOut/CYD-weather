@@ -70,6 +70,18 @@ struct SwipeState {
 };
 static SwipeState swipe;
 
+// Settings tap edge state: set when a DOWN edge was consumed, cleared when
+// the finger lifts. File scope so settingsTouchRearm() can reset it after a
+// long blocking operation (see touch.h).
+static bool settingsDown = false;
+
+// Re-arm the Settings tap edge (see touch.h for why).
+void settingsTouchRearm() {
+  lgfx::touch_point_t pts[5];
+  if (tft.getTouch(pts, 5) == 0)
+    settingsDown = false;
+}
+
 void handleTouch() {
   lgfx::touch_point_t pts[5];
   int n = tft.getTouch(pts, 5);
@@ -80,7 +92,6 @@ void handleTouch() {
   //  Fires on the DOWN edge only and re-arms on touch-up: a tap that switches
   //  the page must not re-fire on the new page while the finger is still down.
   // ----
-  static bool settingsDown = false;
   if (settingsActive()) {
     if (n > 0) {
       if (!settingsDown) {

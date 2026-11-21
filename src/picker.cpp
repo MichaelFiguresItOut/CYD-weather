@@ -72,7 +72,7 @@ static void drawPickerChrome(int idx) {
   tft.setTextDatum(TL_DATUM);
 
   // Hint in the gap above the preview
-  const char* hint = "SWIPE OR TAP CORNER: PREV/NEXT · TAP: SELECT";
+  const char* hint = "SWIPE OR TAP CORNER: PREV/NEXT - TAP: SELECT";
   tft.setTextSize(1.0f);
   int hw = tft.textWidth(hint);
   tft.setTextColor(C(0x3d,0x5f,0x8f));

@@ -33,6 +33,22 @@
 // ---------------------------------------------------------------------------
 static const char*    METAR_URL         = "https://aviationweather.gov/api/data/metar?ids=KJRB,KLGA,KEWR&format=json";
 static const uint32_t METAR_MAX_AGE_S   = 90UL * 60;                // obs older than this -> fall back to model data
+// The station set above is fixed to the NYC metro. It is only a valid
+// "current conditions / rain nearby" source when the user is actually near
+// those airports; from anywhere else it would describe a different city.
+static const double   METAR_VALID_RADIUS_KM = 50.0;
+
+// True when the user's coordinates are within METAR_VALID_RADIUS_KM of KJRB
+// (Teterboro NJ, 40.8503 N / 74.0607 W). KLGA and KEWR are both < 20 km from
+// KJRB, so one anchor covers all three stations.
+static bool userNearMetarStations(double lat, double lon) {
+  const double d2r  = 3.14159265358979 / 180.0;
+  const double dLat = (40.8503 - lat) * d2r;
+  const double dLon = (-74.0607 - lon) * d2r;
+  double a = sin(dLat / 2.0) * sin(dLat / 2.0) +
+             cos(lat * d2r) * cos(40.8503 * d2r) * sin(dLon / 2.0) * sin(dLon / 2.0);
+  return 6371.0 * 2.0 * atan2(sqrt(a), sqrt(1.0 - a)) <= METAR_VALID_RADIUS_KM;
+}
 
 // HTTPS protection: bound every phase of a fetch so a stalled server can never
 // freeze the loop. (Core defaults are connect 30 s and TLS handshake 120 s!)
@@ -294,11 +310,16 @@ bool fetchWeather() {
   }
 
   // ---- METAR observations: KJRB (primary) + KLGA/KEWR for "RAIN NEARBY" ----
+  // Fetched only when the user is near the (NYC metro) stations; elsewhere
+  // the Open-Meteo model (user's own coordinates) drives every
+  // current-condition field, so the live dog/text rain state can never
+  // diverge from the local forecast.
+  bool metarApplies = userNearMetarStations(userSettings.lat, userSettings.lon);
   bool metarOk = false;      // fresh KJRB obs parsed
   int  kjrbCover = -1;       // sky cover from a fresh KJRB obs (-1 = none)
   String metarDesc;
   bool kjrbRain = false, lgaRain = false, ewrRain = false;   // precip in fresh obs
-  {
+  if (metarApplies) {
     WiFiClientSecure mClient;
     mClient.setInsecure();   // same self-contained tradeoff as the Open-Meteo client
     mClient.setConnectionTimeout(HTTP_TIMEOUT_MS);
@@ -351,6 +372,8 @@ bool fetchWeather() {
     } else {
       Serial.println("[METAR] http.begin failed");
     }
+  } else {
+    Serial.println("[METAR] skipped: user not near configured stations");
   }
 
   if (metarOk) {
@@ -412,8 +435,10 @@ bool fetchWeather() {
 static const char* selectDogImage() {
   if (!wx.valid || isnan(wx.feelsLike)) return "error.png";
 
-  if (wx.rainingNow)                          return "rain_now.png";
-  if (wx.nextRain[0] != '\0' || wx.rainNearby) return "rain_later.png";
+  if (wx.rainingNow) return "rain_now.png";
+  // Same rain predicate as buildRainLine() (display.cpp): the dog and the
+  // rain text must never disagree about whether rain is expected.
+  if (wx.nextRain[0] != '\0' || (wx.rainNearby && wx.nearbyStns[0])) return "rain_later.png";
 
   float f = wx.feelsLike;   // °F
   const char* band;

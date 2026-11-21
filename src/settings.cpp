@@ -31,6 +31,7 @@
 //  (setTextSize + textWidth without the built-in-font argument).
 // ---------------------------------------------------------------------------
 #include "settings.h"
+#include "touch.h"
 
 #include <WiFi.h>
 #include <string.h>
@@ -364,10 +365,10 @@ void drawMain() {
   tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
   drawHeader("SETTINGS", false);
   const char* items[4][2] = {
-    { "APPEARANCE",  "theme · units · clock · date" },
-    { "LOCATION",    "add location · lat/lon" },
-    { "TIME ZONE",   "time zone · daylight saving" },
-    { "WI-FI",       "networks · join · add" },
+    { "APPEARANCE",  "theme - units - clock - date" },
+    { "LOCATION",    "add location - lat/lon" },
+    { "TIME ZONE",   "time zone - daylight saving" },
+    { "WI-FI",       "networks - join - add" },
   };
   for (int i = 0; i < 4; i++)
     drawRow(i, items[i][0], items[i][1], i == sGrid);
@@ -403,7 +404,7 @@ void drawWeather() {
   char loc[72], locFit[72];
   if (userSettings.placeName[0])
     snprintf(loc, sizeof(loc), "%s%s%s", userSettings.placeName,
-             userSettings.postalCode[0] ? " \xC2\xB7 " : "", userSettings.postalCode);
+             userSettings.postalCode[0] ? " - " : "", userSettings.postalCode);
   else
     snprintf(loc, sizeof(loc), "--");
   int locSz = (txtW(loc, 2) <= 296) ? 2 : 1;
@@ -451,9 +452,9 @@ void drawPostal() {
   }
   char hint[40];
   if (geoPageCount() > 1)
-    snprintf(hint, sizeof(hint), "PAGE %d/%d · TAP TO APPLY", geoPage + 1, geoPageCount());
+    snprintf(hint, sizeof(hint), "PAGE %d/%d - TAP TO APPLY", geoPage + 1, geoPageCount());
   else
-    snprintf(hint, sizeof(hint), "%d RESULT%s · TAP TO APPLY", geoCount,
+    snprintf(hint, sizeof(hint), "%d RESULT%s - TAP TO APPLY", geoCount,
              geoCount == 1 ? "" : "S");
   drawFooter(hint);
 }
@@ -461,9 +462,11 @@ void drawPostal() {
 void drawTime() {
   tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
   drawHeader("TIME ZONE", false);
-  char tz[40];
-  fitText(userSettings.timezone.name, 2, 200, tz, sizeof(tz));
-  drawListRow(0, "TIME ZONE", tz, sGrid == 0);
+  // Hand the full name to drawListRow (value column is size 1, right-aligned,
+  // trailing-trimmed); the longest zone name ("Australia East (AEST)",
+  // 21 chars) fits untrimmed. The old fitText() pre-pass trimmed from the
+  // START, so "Eastern Europe (EET)" showed up as "ern Europe (EET)".
+  drawListRow(0, "TIME ZONE", userSettings.timezone.name, sGrid == 0);
   bool dst = (userSettings.timezone.dstOffsetSec != userSettings.timezone.stdOffsetSec);
   drawListRow(1, "DAYLIGHT SAVING", dst ? "DST ON" : "DST OFF", sGrid == 1);
   drawResetButton("CLEAR / RESET");
@@ -494,7 +497,7 @@ void drawTzList() {
     drawListRow(i, TIMEZONES[idx].name, val, i == sGrid);
   }
   char hint[40];
-  snprintf(hint, sizeof(hint), "PAGE %d/%d · TAP TO SELECT", tzPage + 1, tzPageCount());
+  snprintf(hint, sizeof(hint), "PAGE %d/%d - TAP TO SELECT", tzPage + 1, tzPageCount());
   drawFooter(hint);
 }
 
@@ -604,7 +607,7 @@ void drawScan() {
   drawListRow(SCAN_PER_PAGE, "RESCAN", "scan again", false);
   char hint[48];
   if (scanPageCount() > 1)
-    snprintf(hint, sizeof(hint), "PAGE %d/%d · TAP A NETWORK TO JOIN",
+    snprintf(hint, sizeof(hint), "PAGE %d/%d - TAP A NETWORK TO JOIN",
              scanPage + 1, scanPageCount());
   else
     snprintf(hint, sizeof(hint), "TAP A NETWORK TO JOIN");
@@ -612,6 +615,11 @@ void drawScan() {
 }
 
 void draw() {
+  // Every long blocking operation in the settings flow (keyboard modal,
+  // geocoding, weather fetch, Wi-Fi scan/join) ends in a redraw; re-arm the
+  // tap edge so the first tap afterwards is not swallowed. No-op while a
+  // finger is still down (a tap that switched the page keeps its suppression).
+  settingsTouchRearm();
   switch (page) {
     case PAGE_MAIN:       drawMain();       break;
     case PAGE_APPEARANCE: drawAppearance(); break;
@@ -778,7 +786,7 @@ void editCoord(bool isLat, int tapX) {
   snprintf(num, sizeof(num), "%.4f", isLat ? userSettings.lat : userSettings.lon);
   int cursor = coordCursorAt(isLat ? "LATITUDE: " : "LONGITUDE: ", num, tapX);
   int r = keypadNumeric(isLat ? "LATITUDE" : "LONGITUDE",
-                        isLat ? "-90..90 · TAP FIELD TO MOVE |" : "-180..180 · TAP FIELD TO MOVE |",
+                        isLat ? "-90..90 - TAP FIELD TO MOVE |" : "-180..180 - TAP FIELD TO MOVE |",
                         num, (int)sizeof(num), 12,
                         isLat ? -90.0f : -180.0f, isLat ? 90.0f : 180.0f, cursor);
   if (r != KEY_OK) { draw(); return; }   // < BACK: original coordinate kept
