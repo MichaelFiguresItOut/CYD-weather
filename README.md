@@ -16,11 +16,12 @@ This file is the shared reference for future work: read it first in any new thre
 ## Files
 - `src/main.cpp` — app shell: `setup()`/`loop()`, boot sequence, refresh cadence
 - `src/config.{h,cpp}` — centralized configuration: `UserSettings` (all user-adjustable settings + site defaults), app timing/NTP constants, NVS persistence for every setting (`loadSettings()` + per-setting `save*()`), automatic/manual/unconfigured modes for location and timezone; see the Configuration section
-- firmware modules: `src/display.{h,cpp}` (TFT init), `src/wifi_conn.{h,cpp}` (WiFi credential seam + connect/auto-reconnect + scan), `src/weather.{h,cpp}` (fetch/parse, SD card + dog image), `src/render.{h,cpp}` (themes + per-second partial updates), `src/picker.{h,cpp}` (theme picker + swipe animation), `src/touch.{h,cpp}` (touch zones + gestures), `src/settings.{h,cpp}` (Settings app; see "Settings app (touchscreen)"), `src/keyboard.{h,cpp}` (blocking QWERTY + numeric keypad modals), `src/geocode.{h,cpp}` (postal-code + reverse geocoding for the LOCATION page), `src/time_util.{h,cpp}` (NTP + timezone), `src/metar.{h,cpp}` / `src/rain_timeline.{h,cpp}` (rain analysis), `src/theme_ids.h` (theme indices)
+- firmware modules: `src/display.{h,cpp}` (TFT init), `src/wifi_conn.{h,cpp}` (WiFi credential seam + connect/auto-reconnect + scan), `src/weather.{h,cpp}` (fetch/parse, SD card + dog image), `src/render.{h,cpp}` (themes + per-second partial updates), `src/picker.{h,cpp}` (theme picker + swipe animation), `src/touch.{h,cpp}` (touch zones + gestures), `src/settings.{h,cpp}` (Settings app; see "Settings app (touchscreen)"), `src/keyboard.{h,cpp}` (blocking QWERTY + numeric keypad modals), `src/geocode.{h,cpp}` (location lookup (postal code / city) + reverse geocoding for the LOCATION page), `src/time_util.{h,cpp}` (NTP + timezone), `src/metar.{h,cpp}` / `src/rain_timeline.{h,cpp}` (rain analysis), `src/theme_ids.h` (theme indices)
 - `src/nunito_bff.h` — generated Nunito BFF font blobs (masters em9/10/12/13/20/48) shared by themes 1 (SKY), 2 (SPLIT) and 3 (BENTO); regenerate with `tools/make_nunito_bff.py`, verify with `tools/check_bff_space.py`
 - `src/dog_image.{h,cpp}` — SD-card PNG decoder; keeps natural RGB565 + alpha, composites per row at draw time (see Dog outfit images section)
 - `lib/puff/` — vendored Mark Adler `puff.c/h` (public-domain minimal DEFLATE inflater; the core's zlib is not linked into the app)
 - `test/test_decoder.py` — host-side validation of the decode + composite pipeline against PIL for all 17 outfit PNGs (`python test/test_decoder.py`; ~206k px checked)
+- `test/tz_verify.py` — host-side timezone verification: mirrors the C++ catalog + `localOffsetSec()` DST math and hourly-sweeps 2024–2033 for all 18 catalog zones against Python `zoneinfo` (IANA tzdb) (`python test/tz_verify.py`; ~1.58M samples, all must match)
 - `test/capture_boot.py` / `test/enter_download_mode.py` — pyserial helpers over COM4: reset + capture boot log / force download mode (the force-download-mode path does NOT work on this board — use the manual button dance, see Build & flash)
 - `tools/make_nunito_bff.py` — rasterizes Nunito (weight 700) at em sizes 10/13/20/48 into BFF blobs → rewrites `src/nunito_bff.h` (needs Pillow; font source `tools/fonts/Nunito-wght.ttf`)
 - `tools/check_bff_space.py` — host-side verification: mimics `BFFfont` parsing exactly, decodes every glyph of every master against re-rasterized ground truth (`bad glyphs: 0/95` per master = good; exit code 1 on any mismatch)
@@ -240,10 +241,10 @@ instance (`userSettings`), initialized with the defaults in `config.cpp`:
 |---|---|---|---|
 | `lat` / `lon` | weather location (Open-Meteo requests) | from `src/local_config.h` (gitignored) | yes (`lat`/`lon` f32) |
 | `locationMode` | `SettingMode` for lat/lon: UNCONFIGURED / AUTOMATIC / MANUAL | MANUAL (existing installs keep their built-for-site values) | yes (`locMode` u8) |
-| `postalCode` | postal code entered on the LOCATION page (US ZIP, ZIP+4, or international code) | `""` | yes (`postcode` str) |
+| `postalCode` | postal code or city entered on the LOCATION page (US ZIP, ZIP+4, international code, or city name) | `""` | yes (`postcode` str) |
 | `placeName` | resolved location display ("City, Region, CountryCode") from geocoding | `""` | yes (`placename` str) |
 | `timezone` | `TimezoneRules`: std/DST offsets + DST transition (month, nth Sunday, wall-clock hour) | US Eastern (UTC-5/UTC-4, 2nd Sun Mar → 1st Sun Nov) | yes (`tzName` str, `tzStd`/`tzDst` i32, `tzDstS_M/W/H` + `tzDstE_M/W/H` u8) |
-| `timezoneMode` | `SettingMode` for the timezone (independent of `locationMode`) | MANUAL | yes (`tzMode` u8) |
+| `timezoneMode` | `SettingMode` for the timezone (independent of `locationMode`) | AUTOMATIC (fresh install — the first fetch resolves the built-for-site zone; existing installs migrate, see below) | yes (`tzMode` u8) |
 | `theme` | selected theme index (0–3) | BASIC (0), restored from NVS at boot | yes (`theme` u32) |
 | `useCelsius` | temperature display unit (F/C) | F | yes (`celsius` u8) |
 | `use24Hour` | clock format (12h/24h) | US 12-hour | yes (`clock24` u8) |
@@ -284,11 +285,16 @@ instance (`userSettings`), initialized with the defaults in `config.cpp`:
   refresh behavior. The detection services and the settings UI that lets the
   user choose modes are not implemented yet.
 - **Existing-install migration**: an install that predates this persistence
-  has no `locMode`/`tzMode` keys; those load as MANUAL with the site defaults
-  (the values it was always running with), so a working install keeps its
-  location and timezone and can never be handed to automatic detection. The
-  legacy 5-theme numbering migration (`themeVer` < 2 → remap + write 2) is
-  unchanged and still guarded by `themeVer=2` on every save.
+  has no `locMode`/`tzMode` keys. Location loads as MANUAL with the site
+  default (the value it was always running with), so a working install keeps
+  its location and is never handed to automatic detection. The timezone is
+  the one exception (Phase 2B): a pre-Phase-2B install with a saved zone pick
+  loads as MANUAL (nothing ever changed it, so the displayed time is
+  unchanged); one with no saved zone loads as AUTOMATIC and the first weather
+  fetch re-resolves the same built-for-site zone from the same coordinates —
+  the displayed time is unchanged either way. The legacy 5-theme numbering
+  migration (`themeVer` < 2 → remap + write 2) is unchanged and still guarded
+  by `themeVer=2` on every save.
 
 ## Settings app (touchscreen)
 Full-screen modal UI (`src/settings.{h,cpp}`), entered from the **SETTINGS** button (top-right corner) of the THEME picker; `< BACK` walks one level back at a time, the main page's `< BACK` returns to the picker and repaints the dashboard. While active, `touch.cpp` routes every touch to the settings app (`settingsTouch()`) and `main.cpp` suppresses dashboard redraws. Every change is written to NVS (`cydwx`) immediately — there is no Apply step (spec requirement).
@@ -298,8 +304,8 @@ Main page: four section tiles.
 | Section | Rows | Behavior |
 |---|---|---|
 | APPEARANCE | THEME, TEMPERATURE, CLOCK, DATE | all four rows tap-to-cycle (theme cycles the 4 themes; the others toggle) |
-| LOCATION | CURRENT LOCATION (display only — "City, Region, CC" plus the postal code when known), POSTAL CODE, LATITUDE, LONGITUDE | POSTAL CODE opens the QWERTY keyboard ("US ZIP, ZIP+4 OR INTL CODE"); the entered code is uppercased, trimmed, saved immediately, then geocoded via the Open-Meteo Geocoding API with a single Nominatim/OSM fallback request per action for international codes Open-Meteo doesn't index (identifying User-Agent, 1 req/s limit respected); the POSTAL CODE page stays up for the whole lookup (shows `LOOKING UP ON OPEN-METEO...`, then `FALLING BACK TO NOMINATIM...` when Open-Meteo has no match), then lists up to 5 matches (name + coordinates + region) on the same screen and tapping one applies it — coordinates saved, `locationMode` → MANUAL, resolved name stored (CURRENT LOCATION row), weather refetched; 0 matches or a network failure keeps the entered code and shows `NO MATCH FOR <code>` / `LOOKUP FAILED - RETRY` on the same page (the header's `< BACK` returns to LOCATION) without touching the coordinates. LATITUDE/LONGITUDE → blocking numeric keypad (range-checked, −90..90 / −180..180; `< BACK` discards, original kept); the keypad opens with the `|` cursor under the digit the finger tapped on the row (tapping the field moves it), digits insert at the cursor, BAK backspaces left of it and DEL deletes right of it — so a coordinate can be fixed in place; on confirming a valid pair: coordinates saved, `locationMode` → MANUAL, a keyless reverse geocode (BigDataCloud) updates CURRENT LOCATION (and the POSTAL CODE row when the service returns a postal code — a failed reverse lookup leaves the name unset but the coordinates stay in use), weather refetched |
-| TIME ZONE | TIME ZONE, DAYLIGHT SAVING | TIME ZONE opens the paginated list (5 zones/page, `<` / `>` header arrows, `PAGE n/N` footer; opens on the page holding the current zone); DAYLIGHT SAVING toggles DST (on = +1 h during the DST window; off = `dstOffsetSec == stdOffsetSec`, window ignored) |
+| LOCATION | CURRENT LOCATION (display only — "City, Region, CC" plus the postal code when known), ADD LOCATION, LATITUDE, LONGITUDE | ADD LOCATION opens the QWERTY keyboard ("POSTAL CODE OR CITY") — accepts a postal code (US ZIP, ZIP+4, international) or a city name ("NEW YORK, NY", "WELLINGTON, NZ"; letters and the comma come from the keyboard's 123 page); the entered text is uppercased, trimmed, saved immediately, then geocoded via the Open-Meteo Geocoding API with a single Nominatim/OSM fallback request per action for codes or city+state phrases Open-Meteo doesn't index (identifying User-Agent, 1 req/s limit respected); the ADD LOCATION page stays up for the whole lookup (shows `LOOKING UP ON OPEN-METEO...`, then `FALLING BACK TO NOMINATIM...` when Open-Meteo has no match), then lists up to 20 matches on the same screen — one "City, Region, CC" row per place (no coordinates — not useful for choosing), 5 per page with the same `<` / `>` header arrows and `PAGE n/N` footer as the TIME ZONE list when the results fill more than one page — and tapping one applies it: coordinates saved, `locationMode` → MANUAL, resolved name stored (CURRENT LOCATION row), weather refetched; 0 matches or a network failure keeps the entered text and shows `NO MATCH FOR <entry>` / `LOOKUP FAILED - RETRY` on the same page (the header's `< BACK` returns to LOCATION) without touching the coordinates. LATITUDE/LONGITUDE → blocking numeric keypad (range-checked, −90..90 / −180..180; `< BACK` discards, original kept); the keypad opens with the `|` cursor under the digit the finger tapped on the row (tapping the field moves it), digits insert at the cursor, BAK backspaces left of it and DEL deletes right of it — so a coordinate can be fixed in place; on confirming a valid pair: coordinates saved, `locationMode` → MANUAL, a keyless reverse geocode (BigDataCloud) updates CURRENT LOCATION (and the ADD LOCATION row when the service returns a postal code — a failed reverse lookup leaves the name unset but the coordinates stay in use), weather refetched |
+| TIME ZONE | TIME ZONE, DAYLIGHT SAVING | TIME ZONE opens the paginated list (18 zones, 5 per page, `<` / `>` header arrows, `PAGE n/N` footer; opens on the page holding the current zone — rules that match no catalog entry, e.g. a catalog zone with DST toggled off, open page 1 with no row highlighted); the page footer shows how the zone was chosen — `MANUAL - TAP TO CHANGE`, `AUTO - TAP TO CHANGE`, or `AUTO - UNSUPPORTED ZONE` when the automatic IANA id has no catalog mapping (the id itself goes to the serial log, the last valid rules keep running); DAYLIGHT SAVING toggles DST (on = +1 h during the DST window; off = `dstOffsetSec == stdOffsetSec`, window ignored) |
 | WI-FI | CURRENT NETWORK (status), SCAN NETWORKS (scan/join), ADD NETWORK (manual entry), WIFI ON/OFF (power), RESTORE SAVED NETWORK (build-time network) | see below |
 
 - **Wi-Fi flow** (see also `src/wifi_conn.{h,cpp}` and the scan requirements in
@@ -436,8 +442,9 @@ Implemented (commit `d70913c`):
 - Every Open-Meteo fetch is made with `timezone=auto`; the response reports
   the IANA zone for the coordinates (top-level `timezone` field).
 - That IANA id is mapped to the catalog zone with matching real-world rules
-  (`IANA_MAP` in `src/timezones.h`; ids whose rules don't match, e.g.
-  `America/Phoenix` — no DST — are unsupported).
+  (`IANA_MAP` in `src/timezones.h`; ids whose rules don't match a catalog
+  entry are unsupported — Phase 2B later extended the map, so e.g.
+  `America/Phoenix` now resolves to a dedicated Arizona entry).
 - The mapped zone is applied as the automatic timezone
   (`applyAutoTimezoneFromIana` in `src/config.cpp`) whenever the mode allows
   automatic (UNCONFIGURED or AUTOMATIC). MANUAL is never overwritten; an
@@ -452,25 +459,49 @@ Implemented (commit `d70913c`):
 time automatically on the next weather update, unless the user has explicitly
 selected a timezone.
 
-### Phase 2B — Timezone correctness and visibility (remaining)
+### Phase 2B — Timezone correctness and visibility (done)
 
 **Goal:** Verify the end-to-end timezone behavior and surface the one case the
-device currently handles silently.
+device previously handled silently.
 
-Pi implements:
+Implemented (commit `3ca8635`):
 
-- Verify: changing the location re-resolves the timezone on the next weather
-  update only while the mode is AUTOMATIC (or UNCONFIGURED); MANUAL is left
-  untouched.
-- Verify: automatic and manual timezone changes stay correct across daylight
-  saving transitions and NTP synchronization (NTP UTC + catalog offsets).
-- Surface unsupported IANA ids: when Open-Meteo reports a zone with no catalog
-  mapping, the device keeps the last valid rules silently — show this on the
-  TIME ZONE page (e.g. "AUTO - unsupported zone") so the user isn't guessing
-  why the time didn't change.
+- Verified with `test/tz_verify.py` — a host-side mirror of the C++ catalog +
+  `localOffsetSec()` DST math that hourly-sweeps 2024–2033 for all 18 catalog
+  zones against Python `zoneinfo` (IANA tzdb): 1,581,120 samples, exact
+  match. Automatic and manual mode share the same `localOffsetSec()`, and the
+  clock stays NTP-UTC with the catalog offset applied at render time, so the
+  sweep covers the automatic, manual and NTP-sync cases in one pass (location
+  changes re-resolve via `applyAutoTimezoneFromIana` only while the mode
+  allows automatic — MANUAL is never overwritten, unchanged from Phase 2A).
+- Fixed what the sweep caught: `localOffsetSec()` now handles
+  southern-hemisphere zones whose DST window crosses New Year (AU/NZ: start
+  Sept/Oct, end April — the active window for year y is [start(y), end(y+1))
+  and Jan–Apr instants before end(y) belong to the previous year's window),
+  and "last Sunday" transitions are computed from the month length instead of
+  assuming a 5th Sunday exists (UK ends on the last Sunday of October).
+- Catalog corrections + additions: Australia East ends 1st Sunday April (was
+  5th); New Zealand starts last Sunday September (was 1st) and ends 1st
+  Sunday April (was 5th). New dedicated entries: Alaska (AKST/AKDT — US DST
+  dates at −9/−8), Arizona (MST), Hawaii (HST), Nepal (NPT +05:45) — no-DST
+  zones are no longer approximated by a neighboring DST zone. `IANA_MAP`
+  gained these four zones plus same-rule cities (Dublin/Lisbon, CET capitals,
+  Montreal, Canberra/Hobart).
+- Unsupported IANA ids are surfaced: the TIME ZONE page footer shows
+  `AUTO - UNSUPPORTED ZONE` when the automatic id has no catalog mapping
+  (the id itself goes to the serial log); the last valid rules keep running.
+- Timezone-mode migration: fresh installs default to AUTOMATIC (the first
+  fetch resolves the built-for-site zone); pre-Phase-2B installs load as
+  MANUAL when a zone was saved, AUTOMATIC otherwise — the displayed time is
+  unchanged either way (see Configuration).
+- `timezoneIndexByRules()` returns −1 for unknown rules (was: row 0), so a
+  catalog zone with DST toggled off no longer highlights the wrong row.
 
-**Deliverable:** Timezone behavior verified end-to-end (location changes, DST,
-NTP), and the automatic mode's silent case is visible in the UI.
+**Deliverable:** Timezone behavior verified end-to-end (location changes,
+DST, NTP), and the automatic mode's silent case is visible in the UI.
+
+(The same commit also reworks the LOCATION page's postal-code entry into the
+ADD LOCATION postal-code/city entry — see the Settings app section above.)
 
 ### Phase 3 — Weather station discovery
 

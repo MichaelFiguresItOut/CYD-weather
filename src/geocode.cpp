@@ -13,12 +13,13 @@
 //  Geocoding for the LOCATION settings page (see geocode.h for the
 //  contract).
 //
-//  Forward (postal code -> place): Open-Meteo Geocoding API first — US ZIPs
-//  and many international codes resolve directly. When Open-Meteo answers
-//  definitively with zero results (typical for international alphanumeric
-//  codes its index doesn't cover), Nominatim (OpenStreetMap) gets one
-//  fallback request. A network failure on Open-Meteo is reported as a
-//  failure without hammering a second service.
+//  Forward (postal code or city name -> place): Open-Meteo Geocoding API
+//  first — US ZIPs and many international codes resolve directly, and plain
+//  city names match its name index. When Open-Meteo answers definitively
+//  with zero results (typical for international alphanumeric codes and
+//  "CITY, ST" phrases its index doesn't cover), Nominatim (OpenStreetMap)
+//  gets one fallback request. A network failure on Open-Meteo is reported
+//  as a failure without hammering a second service.
 //
 //  Reverse (coordinates -> place): Open-Meteo has no reverse-geocoding
 //  endpoint, so this uses BigDataCloud's free keyless reverse-geocode

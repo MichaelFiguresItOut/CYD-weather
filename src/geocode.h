@@ -5,10 +5,11 @@
 //  Phase 1):
 //
 //    geocodePostalOpenMeteo() / geocodePostalNominatim() — forward:
-//                       postal code -> candidate places (US ZIP, ZIP+4,
-//                       international codes); the settings flow runs them in
-//                       sequence (Open-Meteo first, Nominatim on a definite
-//                       no-match) and shows which service is querying.
+//                       postal code or city name -> candidate places (US
+//                       ZIP, ZIP+4, international codes, "CITY, ST"); the
+//                       settings flow runs them in sequence (Open-Meteo
+//                       first, Nominatim on a definite no-match) and shows
+//                       which service is querying.
 //    geocodeReverse() — reverse: coordinates -> human-readable location
 //
 //  Services (all free, no API key, HTTPS):
@@ -34,7 +35,7 @@ struct GeoResult {
   char postcode[12];
 };
 
-// Resolve `query` (a postal code) into up to `maxResults` candidate places
+// Resolve `query` (a postal code or city name) into up to `maxResults`
 // using one specific service. Returns the number of results (0 = a definite
 // no-match from that service) or -1 on network/parse failure. Results are
 // stored in caller-owned `results`. Each call makes at most one request, so
