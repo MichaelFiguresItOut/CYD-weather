@@ -411,9 +411,11 @@ void nwsAgeText(long ageSec, char* out, size_t outLen) {
   if (outLen == 0) return;
   if (ageSec < 0) { snprintf(out, outLen, "AGE UNKNOWN"); return; }
   if (ageSec < 90) { snprintf(out, outLen, "JUST NOW"); return; }
-  if (ageSec < 3600) snprintf(out, outLen, "%ldM", ageSec / 60);
+  // "AGO" suffix: the row otherwise just says "... - 32M", which reads like
+  // a distance, not an observation age.
+  if (ageSec < 3600) snprintf(out, outLen, "%ldM AGO", ageSec / 60);
   else if (ageSec < 86400)
-    snprintf(out, outLen, "%ldH %02ldM", ageSec / 3600, (ageSec % 3600) / 60);
+    snprintf(out, outLen, "%ldH %02ldM AGO", ageSec / 3600, (ageSec % 3600) / 60);
   else
-    snprintf(out, outLen, "%ldD %ldH", ageSec / 86400, (ageSec % 86400) / 3600);
+    snprintf(out, outLen, "%ldD %ldH AGO", ageSec / 86400, (ageSec % 86400) / 3600);
 }

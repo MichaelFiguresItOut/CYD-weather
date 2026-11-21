@@ -69,5 +69,5 @@ int nwsFetchStations(const char* stationsUrl, NwsStation* out, int maxStations);
 int nwsFetchLatestObs(NwsStation* st);
 
 // Human-readable age for display, all-caps to match the settings UI:
-// "AGE UNKNOWN", "JUST NOW", "5M", "1H 05M", "1D 3H".
+// "AGE UNKNOWN", "JUST NOW", "5M AGO", "1H 05M AGO", "1D 3H AGO".
 void nwsAgeText(long ageSec, char* out, size_t outLen);

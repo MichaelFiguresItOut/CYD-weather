@@ -844,7 +844,7 @@ void stnSelect(int i) {
 
 // One station row, two lines:
 //   "KNYC - NEW YORK CITY, CENTRAL PARK     8.7 KM"
-//   "60.1°F CLEAR - 5M"    (warn colour when the observation is stale)
+//   "60.1 F CLEAR - 5M AGO"    (warn colour when the observation is stale)
 void drawStationRow(int i, const NwsStation* s) {
   int y = ROW_Y0 + i * (ROW_H + ROW_GAP);
   tft.fillRoundRect(ROW_X, y, ROW_W, ROW_H, 6, colRowBg);
@@ -888,12 +888,14 @@ void drawStationRow(int i, const NwsStation* s) {
   if (s->hasObs) {
     char age[16];
     nwsAgeText(s->obsAgeSec, age, sizeof(age));
+    // No \xB0 degree sign: the GLCD bitmap font has no such glyph (draws a
+    // checkered box); the main screen likewise omits it ("57.0 F").
     if (isnan(s->obsTempC))
       snprintf(obs, sizeof(obs), "%s - %s", s->obsText[0] ? s->obsText : "NO DATA", age);
     else if (userSettings.useCelsius)
-      snprintf(obs, sizeof(obs), "%.1f\xB0" "C %s - %s", s->obsTempC, s->obsText, age);
+      snprintf(obs, sizeof(obs), "%.1f C %s - %s", s->obsTempC, s->obsText, age);
     else
-      snprintf(obs, sizeof(obs), "%.1f\xB0" "F %s - %s",
+      snprintf(obs, sizeof(obs), "%.1f F %s - %s",
                s->obsTempC * 9.0f / 5.0f + 32.0f, s->obsText, age);
     if (s->obsAgeSec >= NWS_OBS_FRESH_MAX_S) obsCol = colWarn;
   } else if (s->obsFail) {

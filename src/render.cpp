@@ -305,6 +305,20 @@ static float bffFit(const lgfx::IFont& f, const char* s, int avail) {
   return (w > avail && w > 0) ? (float)avail / (float)w : 1.0f;
 }
 
+// Rain-chip font pick: the LARGEST em size whose scale-1.0 width fits in
+// `avail` px, from em13 down. BFF fonts are never scaled below 1.0 - sub-1.0
+// runs LGFX's nearest-neighbor scaler, which drops 1px source columns and
+// garbles thin strokes (a 212px line like "Rain expected 10:45 AM tomorrow"
+// used to land at em13@0.85 and render as broken hairlines). The longest
+// rain line is 142px @em9, inside every chip budget (161-180px).
+static lgfx::BFFfont* bffRainFont(const char* s, int avail, float* sc) {
+  static lgfx::BFFfont* order[] = { &nunitoF13, &nunitoF12, &nunitoF10, &nunitoF9 };
+  for (auto* f : order)
+    if (bffWidth(*f, s) <= avail) { *sc = 1.0f; return f; }
+  *sc = bffFit(nunitoF9, s, avail);   // longer than any real rain line
+  return &nunitoF9;
+}
+
 // BFF text at full-space line-box top-left (x,y), scale sc, color c.
 // `back` = RAW code of the background under the glyphs. This fork's alpha renderer
 // blends glyph edge pixels toward getBaseColor(); on this inverted panel the default
@@ -454,7 +468,7 @@ static void renderTheme1(const T& t) {   // SKY - Nunito BFF fonts
   int vw = (int)(bffWidth(nunitoF20, feels) * fvs);
   bffText(t, nunitoF20, feels, 14 + 204 - 12 - vw, 168, p.fVal, fvs, p.fBg);
 
-  // Rain chip (em13).
+  // Rain chip (em13, dropping to em10/em9 when the line overflows the chip).
   char rain[48]; buildRainLine(rain, sizeof(rain));
   // Same predicate as buildRainLine(): umbrella shows iff the text reports rain.
   bool rainy = wx.valid && (wx.rainingNow || (wx.rainNearby && wx.nearbyStns[0]) || wx.nextRain[0]);
@@ -462,8 +476,9 @@ static void renderTheme1(const T& t) {   // SKY - Nunito BFF fonts
                          : (wx.valid    ? p.rDot : C(0x9d,0xb4,0xc8));             // yellow circle / neutral dot
   gT->fillRoundRect(t.X(14), t.Y(198), max(2, t.W(204)), max(2, t.H(28)), (int)(8 * t.sx + 0.5f), p.rBg);
   gT->drawRoundRect(t.X(14), t.Y(198), max(1, t.W(204) - 1), max(1, t.H(28) - 1), (int)(7 * t.sx + 0.5f), p.rBd);
-  float rsc = bffFit(nunitoF13, rain, 204 - 24);
-  int rw2 = (int)(bffWidth(nunitoF13, rain) * rsc);
+  float rsc;
+  lgfx::BFFfont* rf = bffRainFont(rain, 204 - 24, &rsc);
+  int rw2 = (int)(bffWidth(*rf, rain) * rsc);
   int cxFull = 14 + 204 / 2;
   if (rainy)
     drawUmbrella(t, (int)(cxFull - rw2 / 2.0f - 9), 198 + 14, 1.0f, iconC, p.rBg);
@@ -471,7 +486,8 @@ static void renderTheme1(const T& t) {   // SKY - Nunito BFF fonts
     int dr2 = max(1, (int)(3 * 1.2f * t.sx + 0.5f));
     gT->fillCircle(t.X((int)(cxFull - rw2 / 2.0f - 9)), t.Y(198 + 14), dr2, iconC);
   }
-  bffText(t, nunitoF13, rain, (int)(cxFull - rw2 / 2.0f), 206, p.rTxt, rsc, p.rBg);
+  int ry = (rf == &nunitoF13 || rf == &nunitoF12) ? 206 : 207;   // centred per line height
+  bffText(t, *rf, rain, (int)(cxFull - rw2 / 2.0f), ry, p.rTxt, rsc, p.rBg);
 
   // Hint: centered (em10).
   bffCenter(t, nunitoF10, "TOUCH TO REFRESH", 115, 230, p.hint, 1.0f, bgCode(1, 0, 230));
@@ -600,16 +616,19 @@ static void renderTheme2(const T& t) {   // SPLIT
   bffText(t, nunitoF20, feels, 213 - vw, 146 + (32 - (int)(20 * fvs)) / 2, p.fVal, fvs, p.fBg);
 
   // RAIN chip [12,184] 213 wide: same outer box as the feels chip (content-box).
-  // Umbrella icon + text (em13 @11.5px) centered as a group.
+  // Umbrella icon + text (em12 @1.0, em10 when the line overflows) centred
+  // as a group.
   char rain[48]; buildRainLine(rain, sizeof(rain));
   gT->fillRoundRect(t.X(12), t.Y(184), max(2, t.W(213)), max(2, t.H(27)), (int)(8 * t.sx + 0.5f), p.rBg);
   gT->drawRoundRect(t.X(12), t.Y(184), max(1, t.W(213) - 1), max(1, t.H(27) - 1), (int)(7 * t.sx + 0.5f), p.rBd);
-  // em12 @1.0 (design 11.5px): sub-1.0 BFF scaling decimates 1px strokes.
-  float rsc = bffFit(nunitoF12, rain, 213 - 40);
-  int rw = (int)(bffWidth(nunitoF12, rain) * rsc + 0.5f);
+  // em12 @1.0 (design 11.5px); drop to em10 when the line overflows - sub-1.0
+  // BFF scaling decimates 1px strokes (see bffRainFont).
+  float rsc;
+  lgfx::BFFfont* rf = bffRainFont(rain, 213 - 40, &rsc);
+  int rw = (int)(bffWidth(*rf, rain) * rsc + 0.5f);
   int gx = 12 + (213 - (13 + 6 + rw)) / 2;     // group: umbrella(13px) + gap(6px) + text
   drawUmbrella(t, gx + 6, 184 + 13, 1.0f, p.rDot, p.rBg);
-  bffText(t, nunitoF12, rain, gx + 19, 184 + (27 - (int)(12 * rsc)) / 2, p.rTxt, rsc, p.rBg);
+  bffText(t, *rf, rain, gx + 19, 184 + (27 - (int)(rf->ascent - rf->descent)) / 2, p.rTxt, rsc, p.rBg);
 
   // row1 (design top:217 width:190): left text @x=12; UPD right-aligned at x=202.
   // em9 @1.0 = design's 9px (em10@0.85 decimated and garbled thin strokes).
@@ -807,19 +826,22 @@ static void renderTheme3Nunito(const T& t) {
   drawMiniCloud(t, 25, 113, p.descTxt);
   bffText(t, nunitoF12, desc, 42, 112, p.descTxt, bffFit(nunitoF12, desc, 154), p.cardBg);
 
-  // ---- Rain card (design 192x34, r10): dot/umbrella + em13 text, centered group ----
+  // ---- Rain card (design 192x34, r10): dot/umbrella + text (em13 down to
+  //      em9 via bffRainFont), centered group ----
   gT->fillRoundRect(t.X(8), t.Y(144), t.W(192), t.H(34), (int)(10 * t.sx + 0.5f), p.rBg);
   gT->drawRoundRect(t.X(8), t.Y(144), max(1, t.W(191)), max(1, t.H(33)),
                     (int)(9 * t.sx + 0.5f), p.rBd);
   char rain[48]; buildRainLine(rain, sizeof(rain));
-  float rsc = bffFit(nunitoF13, rain, 161);
-  int rw = (int)(bffWidth(nunitoF13, rain) * rsc + 0.5f);
+  float rsc;
+  lgfx::BFFfont* rf = bffRainFont(rain, 161, &rsc);
+  int rw = (int)(bffWidth(*rf, rain) * rsc + 0.5f);
   bool wet = wx.rainingNow || (wx.rainNearby && wx.nearbyStns[0]) || wx.nextRain[0];
   int iw = wet ? 13 : 6;
   int gx = 8 + (192 - (iw + 7 + rw)) / 2;                  // design gap: 7px
   if (wet) drawUmbrella(t, gx + 6, 163, 1.0f, p.rDot, p.rBg);
   else gT->fillCircle(t.X(gx + 3), t.Y(161), max(1, (int)(3 * t.sx + 0.5f)), p.rDot);
-  bffText(t, nunitoF13, rain, gx + iw + 7, 154, p.rTxt, rsc, p.rBg);
+  int ry = (rf == &nunitoF13 || rf == &nunitoF12) ? 154 : 156;   // centred per line height
+  bffText(t, *rf, rain, gx + iw + 7, ry, p.rTxt, rsc, p.rBg);
 
   // ---- Detail card rows (design: x=22, y=194/207/221) ----
   drawCard(t, 8, 184, 192, 48, p.cardBg, p.cardBd);
