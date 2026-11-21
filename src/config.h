@@ -65,6 +65,13 @@ struct UserSettings {
   bool useCelsius;                // temperature display: false = Fahrenheit
   bool use24Hour;                 // clock: false = US 12-hour ("2:35 PM")
   int  dateFormat;                // 0: "Thursday 12 November 2026"  1: "Thursday November 12, 2026"
+  // Selected NWS observation station (chosen on the STATIONS settings page);
+  // Phase 4 reads nwsStationId for the main screen's NWS data block.
+  // "" = no station selected / none found near the location.
+  char nwsStationId[8];           // ICAO identifier, e.g. "KNYC"
+  char nwsStationName[40];        // NWS display name of the selected station
+  float nwsStationDistKm;         // distance from the location at selection time
+  char nwsStationProvider[16];    // e.g. "ASOS", "ASOS-HFM"
 };
 
 extern UserSettings userSettings;
@@ -91,6 +98,7 @@ void saveTheme();            // theme index (also records the numbering version)
 void saveLocation();         // lat/lon + location mode
 void saveTimezone();         // timezone rules + timezone mode
 void saveDisplaySettings();  // temp unit, clock format, date format
+void saveNwsStation();       // selected NWS station (id/name/distance/provider)
 
 // Settings-page resets (confirmation pages): clear the saved NVS values of
 // one section and persist the cleared state. Nothing outside the section

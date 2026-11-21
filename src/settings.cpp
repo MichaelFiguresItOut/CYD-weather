@@ -14,6 +14,8 @@
 //    WIFI         – current network, network scan, manual SSID entry,
 //                   radio on/off, restore build-time network
 //    SCAN         – scan results (tap to join, keyboardQwerty password)
+//    STATIONS     – NWS observation-station discovery (Phase 3): nearest
+//                   stations with distance + latest-observation freshness
 //    CONFIRM      – CLEAR / RESET confirmation (LOCATION / TIME ZONE /
 //                   WI-FI): < BACK cancels, the red button performs the
 //                   reset and returns to the settings page
@@ -38,6 +40,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <math.h>
 
 #include "config.h"
 #include "display.h"
@@ -48,12 +51,14 @@
 #include "theme_ids.h"
 #include "timezones.h"
 #include "wifi_conn.h"
+#include "nws_station.h"
 #include "weather.h"
 
 namespace {
 
 enum Page { PAGE_MAIN, PAGE_APPEARANCE, PAGE_WEATHER, PAGE_TIME,
-            PAGE_TZLIST, PAGE_WIFI, PAGE_SCAN, PAGE_POSTAL, PAGE_CONFIRM };
+            PAGE_TZLIST, PAGE_WIFI, PAGE_SCAN, PAGE_POSTAL, PAGE_STATIONS,
+            PAGE_STN_SCAN, PAGE_CONFIRM };
 
 // --- Geometry (320x240) ------------------------------------------------
 constexpr int HDR_H      = 26;    // blue header bar
@@ -73,6 +78,8 @@ constexpr int WIFI_ROW_GAP = 2;
 
 constexpr int TZ_PER_PAGE   = 5;    // TIMEZONES per TIMEZONE list page
 constexpr int SCAN_PER_PAGE = 4;    // networks per SCAN page (row 5 = RESCAN)
+constexpr int STN_PER_PAGE  = 4;    // stations per STATIONS page (row 5 = REFRESH)
+constexpr int STN_MAX       = 15;   // matches the nws_station parse cap
 constexpr int GEO_PER_PAGE  = 5;    // location search results per page
 constexpr int GEO_LIST_MAX  = 20;   // search results fetched (paged at GEO_PER_PAGE)
 // Stored scan results (paginated). The ESP32 keeps every AP the passive
@@ -127,6 +134,17 @@ int  geoPage = 0;                    // location results list page
 enum PostalPhase { PP_SEARCHING, PP_RESULTS, PP_MSG };
 PostalPhase postalPhase = PP_MSG;
 char postalMsg[48] = "";
+// STATIONS page state (Phase 3, NWS observation-station discovery). Same
+// pattern as POSTAL: the page stays up through the lookup. Latest
+// observations are fetched per page (up to STN_PER_PAGE requests) when the
+// page is shown, so paging stays fast and request counts stay bounded.
+enum StnPhase { STN_SEARCHING, STN_RESULTS, STN_MSG };
+StnPhase stnPhase = STN_MSG;
+char stnMsg[48] = "";
+NwsStation stn[STN_MAX];
+int  stnCount = 0;
+int  stnPage = 0;
+void drawStnScan();   // used by draw() before its definition below
 
 // LovyanGFX 1.3: textWidth() no longer takes a built-in font number —
 // measure with the text style (same pattern as the rest of the codebase).
@@ -364,13 +382,14 @@ void drawResetButton(const char* label) {
 void drawMain() {
   tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
   drawHeader("SETTINGS", false);
-  const char* items[4][2] = {
+  const char* items[5][2] = {
     { "APPEARANCE",  "theme - units - clock - date" },
     { "LOCATION",    "add location - lat/lon" },
     { "TIME ZONE",   "time zone - daylight saving" },
     { "WI-FI",       "networks - join - add" },
+    { "STATIONS",    "data source - local NWS station" },
   };
-  for (int i = 0; i < 4; i++)
+  for (int i = 0; i < 5; i++)
     drawRow(i, items[i][0], items[i][1], i == sGrid);
   drawFooter("< BACK RETURNS TO THEME PICKER");
 }
@@ -614,6 +633,48 @@ void drawScan() {
   drawFooter(hint);
 }
 
+// STATIONS page (Phase 3): where the weather data comes from (information
+// only, not a button), "and", the selected local NWS station with its
+// details (or "NO LOCAL WEATHER STATION"), and the SCAN button that runs
+// the Local Weather Station lookup. Only the SCAN button (row slot 2) is
+// tappable; the text above it is display-only.
+void drawStations() {
+  tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
+  drawHeader("STATIONS", false);
+  drawFooter("NWS STATIONS (US ONLY) - TAP SCAN TO LOOK UP");
+
+  const int x = ROW_X + 10;
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextSize(1);
+  tft.setTextColor(colBgTxt);
+  tft.drawString("WEATHER DATA BY OPEN-METEO.COM", x, 40);
+  tft.setTextColor(colDim);
+  tft.drawString("AND", x, 56);
+  if (userSettings.nwsStationId[0]) {
+    char line[52], fit[52];
+    snprintf(line, sizeof(line), "%.7s - %.39s",
+             userSettings.nwsStationId, userSettings.nwsStationName);
+    for (char* c = line; *c; c++) *c = (char)toupper((unsigned char)*c);
+    int sz = (txtW(line, 2) <= 296) ? 2 : 1;
+    truncText(line, sz, 296, fit, sizeof(fit));
+    tft.setTextSize(sz);
+    tft.setTextColor(C(0xFF, 0xFF, 0xFF));
+    tft.drawString(fit, x, 72);
+    char det[40];
+    snprintf(det, sizeof(det), "%.1f KM AWAY - %s",
+             userSettings.nwsStationDistKm, userSettings.nwsStationProvider);
+    tft.setTextSize(1);
+    tft.setTextColor(colDim);
+    tft.drawString(det, x, 92);
+  } else {
+    tft.setTextSize(2);
+    tft.setTextColor(C(0xFF, 0xFF, 0xFF));
+    tft.drawString("NO LOCAL WEATHER STATION", x, 72);
+  }
+  drawListRow(2, "SCAN FOR LOCAL WEATHER STATION", "", sGrid == 2, false,
+              112, ROW_H);
+}
+
 void draw() {
   // Every long blocking operation in the settings flow (keyboard modal,
   // geocoding, weather fetch, Wi-Fi scan/join) ends in a redraw; re-arm the
@@ -630,7 +691,252 @@ void draw() {
     case PAGE_CONFIRM:    drawConfirm();    break;
     case PAGE_SCAN:       drawScan();       break;
     case PAGE_POSTAL:     drawPostal();     break;
+    case PAGE_STATIONS:   drawStations();   break;
+    case PAGE_STN_SCAN:   drawStnScan();    break;
   }
+}
+
+// ---------------------------------------------------------------------------
+//  NWS observation-station discovery (Phase 3) — the "Local Weather
+//  Station" page (PAGE_STN_SCAN), reached from the SCAN button on the
+//  STATIONS page.
+//
+//  Flow (the page stays up through the whole lookup, same pattern as the
+//  ADD LOCATION search): tap SCAN -> stnDiscover():
+//    wifi check -> points lookup -> station list -> per-page observation
+//    checks (stnCheckPage, up to STN_PER_PAGE requests) -> results.
+//  A row tap selects that station (stnSelect: persist + back to the
+//  STATIONS page); a REFRESH row re-runs the discovery. A definite
+//  "no stations" outcome (outside NWS coverage / empty list) shows the
+//  message briefly, clears the selection, and returns to the STATIONS page.
+// ---------------------------------------------------------------------------
+
+void stnClearSelection();   // defined below stnDiscover, which calls it
+void stnSelect(int i);
+
+void stnReset() {
+  stnPhase = STN_MSG;
+  stnMsg[0] = 0;
+  stnCount = 0;
+  stnPage = 0;
+}
+
+int stnPageCount() {
+  int p = (stnCount + STN_PER_PAGE - 1) / STN_PER_PAGE;
+  return (p < 1) ? 1 : p;
+}
+
+// Fetch the latest observation for the current page's stations that
+// haven't been checked yet (up to STN_PER_PAGE requests), then show the
+// results. Runs on entry to the page and on every page turn.
+void stnCheckPage() {
+  stnPhase = STN_SEARCHING;
+  const int first = stnPage * STN_PER_PAGE;
+  const int last  = (first + STN_PER_PAGE < stnCount) ? first + STN_PER_PAGE : stnCount;
+  for (int i = first; i < last; i++) {
+    if (stn[i].hasObs || stn[i].obsFail) continue;
+    snprintf(stnMsg, sizeof(stnMsg), "CHECKING %s ...", stn[i].id);
+    draw();
+    delay(50);
+    nwsFetchLatestObs(&stn[i]);   // on failure sets obsFail; the row shows it
+  }
+  stnPhase = STN_RESULTS;
+  draw();
+}
+
+void stnDiscover() {
+  stnReset();
+  stnPhase = STN_SEARCHING;
+  if (!wifiEnabled()) {
+    stnPhase = STN_MSG;
+    snprintf(stnMsg, sizeof(stnMsg), "TURN WIFI ON");
+    draw();
+    return;
+  }
+  snprintf(stnMsg, sizeof(stnMsg), "CONNECTING TO WIFI...");
+  draw();
+  delay(50);
+  if (!wifiEnsureConnected()) {
+    stnPhase = STN_MSG;
+    snprintf(stnMsg, sizeof(stnMsg), "WIFI NOT CONNECTED");
+    draw();
+    return;
+  }
+  snprintf(stnMsg, sizeof(stnMsg), "LOOKING UP NWS POINT...");
+  draw();
+  delay(50);
+  char stationsUrl[64];
+  const int r = nwsPointsLookup(userSettings.lat, userSettings.lon, stationsUrl,
+                                sizeof(stationsUrl));
+  if (r == -2) {                        // 404: outside NWS coverage
+    stnPhase = STN_MSG;
+    snprintf(stnMsg, sizeof(stnMsg), "NOT IN NWS COVERAGE");
+    draw();
+    delay(2000);                        // show it, then back to STATIONS page
+    stnClearSelection();
+    return;
+  }
+  if (r != 0) {
+    stnPhase = STN_MSG;
+    snprintf(stnMsg, sizeof(stnMsg), "NWS LOOKUP FAILED - RETRY");
+    draw();
+    return;
+  }
+  snprintf(stnMsg, sizeof(stnMsg), "FETCHING STATION LIST...");
+  draw();
+  delay(50);
+  // The station list (and with it the observations) may have changed, so
+  // drop all cached per-station observation state before parsing.
+  for (int i = 0; i < STN_MAX; i++) {
+    stn[i].hasObs = false;
+    stn[i].obsFail = false;
+  }
+  stnCount = nwsFetchStations(stationsUrl, stn, STN_MAX);
+  if (stnCount < 0) {
+    stnPhase = STN_MSG;
+    stnCount = 0;
+    snprintf(stnMsg, sizeof(stnMsg), "STATION LIST FAILED - RETRY");
+    draw();
+    return;
+  }
+  if (stnCount == 0) {
+    stnPhase = STN_MSG;
+    snprintf(stnMsg, sizeof(stnMsg), "NO STATIONS FOUND");
+    draw();
+    delay(2000);                        // show it, then back to STATIONS page
+    stnClearSelection();
+    return;
+  }
+  stnPage = 0;
+  stnCheckPage();                       // -> results
+}
+
+// The scan found no stations for the current location (outside NWS coverage
+// or empty list): clear the persisted selection so the STATIONS page shows
+// "NO LOCAL WEATHER STATION", and return there.
+void stnClearSelection() {
+  userSettings.nwsStationId[0] = 0;
+  userSettings.nwsStationName[0] = 0;
+  userSettings.nwsStationDistKm = 0.0f;
+  userSettings.nwsStationProvider[0] = 0;
+  saveNwsStation();
+  page = PAGE_STATIONS;
+  sGrid = 2;
+  draw();
+}
+
+// Row tap on the Local Weather Station page: select that station (persisted
+// to NVS) and return to the STATIONS page with the local station populated.
+void stnSelect(int i) {
+  if (i < 0 || i >= stnCount) return;
+  const NwsStation* s = &stn[i];
+  snprintf(userSettings.nwsStationId, sizeof(userSettings.nwsStationId), "%s", s->id);
+  snprintf(userSettings.nwsStationName, sizeof(userSettings.nwsStationName), "%s", s->name);
+  userSettings.nwsStationDistKm = s->distKm;
+  snprintf(userSettings.nwsStationProvider, sizeof(userSettings.nwsStationProvider),
+           "%s", s->provider);
+  saveNwsStation();
+  Serial.printf("[STN] selected: %s (%s) %.1f km\n", s->id, s->name, (double)s->distKm);
+  page = PAGE_STATIONS;
+  sGrid = 2;
+  draw();
+}
+
+// One station row, two lines:
+//   "KNYC - NEW YORK CITY, CENTRAL PARK     8.7 KM"
+//   "60.1°F CLEAR - 5M"    (warn colour when the observation is stale)
+void drawStationRow(int i, const NwsStation* s) {
+  int y = ROW_Y0 + i * (ROW_H + ROW_GAP);
+  tft.fillRoundRect(ROW_X, y, ROW_W, ROW_H, 6, colRowBg);
+  tft.drawRoundRect(ROW_X, y, ROW_W, ROW_H, 6, colRowBd);
+  tft.setTextDatum(TL_DATUM);
+
+  char label[50];
+  snprintf(label, sizeof(label), "%.4s - %.39s", s->id, s->name);
+  for (char* c = label; *c; c++) *c = (char)toupper((unsigned char)*c);
+
+  char dist[12];
+  if (s->distKm < 100.0f)
+    snprintf(dist, sizeof(dist), "%.1f KM", s->distKm);
+  else
+    snprintf(dist, sizeof(dist), "%d KM", (int)(s->distKm + 0.5f));
+
+  // Line 1: label (trimmed to fit) + right-aligned distance.
+  const int lx = ROW_X + 10;
+  const int budget = (ROW_X + ROW_W - 10) - lx - txtW(dist, 1) - 8;
+  if (txtW(label, 2) <= 180) {
+    tft.setTextSize(2);
+    tft.setTextColor(colText);
+    tft.drawString(label, lx, y + 7);
+  } else {
+    char t[50];
+    snprintf(t, sizeof(t), "%s", label);
+    size_t n = strlen(t);
+    while (n > 3 && txtW(t, 1) > budget) { t[n - 1] = 0; n--; }
+    tft.setTextSize(1);
+    tft.setTextColor(colText);
+    tft.drawString(t, lx, y + 13);
+  }
+  tft.setTextDatum(TR_DATUM);   // right-align the distance at the row edge
+  tft.setTextSize(1);
+  tft.setTextColor(colDim);
+  tft.drawString(dist, 308, y + 12);
+
+  // Line 2: latest observation + age (warn when stale).
+  char obs[60];
+  uint16_t obsCol = colDim;
+  if (s->hasObs) {
+    char age[16];
+    nwsAgeText(s->obsAgeSec, age, sizeof(age));
+    if (isnan(s->obsTempC))
+      snprintf(obs, sizeof(obs), "%s - %s", s->obsText[0] ? s->obsText : "NO DATA", age);
+    else if (userSettings.useCelsius)
+      snprintf(obs, sizeof(obs), "%.1f\xB0" "C %s - %s", s->obsTempC, s->obsText, age);
+    else
+      snprintf(obs, sizeof(obs), "%.1f\xB0" "F %s - %s",
+               s->obsTempC * 9.0f / 5.0f + 32.0f, s->obsText, age);
+    if (s->obsAgeSec >= NWS_OBS_FRESH_MAX_S) obsCol = colWarn;
+  } else if (s->obsFail) {
+    snprintf(obs, sizeof(obs), "OBSERVATION FETCH FAILED");
+  } else {
+    snprintf(obs, sizeof(obs), "OBSERVATION NOT CHECKED");
+  }
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextSize(1);
+  tft.setTextColor(obsCol);
+  tft.drawString(obs, lx, y + ROW_H - 8);
+}
+
+void drawStnScan() {
+  tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
+  if (stnPhase != STN_RESULTS) {
+    drawHeader("LOCAL WEATHER STATION", false);
+    tft.setTextDatum(MC_DATUM);
+    const int msgSz = (txtW(stnMsg, 2) <= 300) ? 2 : 1;
+    tft.setTextSize(msgSz);
+    tft.setTextColor(stnPhase == STN_SEARCHING ? colBgTxt : colWarn);
+    tft.drawString(stnMsg, 160, 108);
+    drawListRow(STN_PER_PAGE, "REFRESH", "look up again", sGrid == STN_PER_PAGE);
+    drawFooter(stnPhase == STN_SEARCHING ? "PLEASE WAIT" : "TAP REFRESH TO RETRY");
+    return;
+  }
+  drawHeader("LOCAL WEATHER STATION", stnPage < stnPageCount() - 1, nullptr,
+             stnPage > 0);
+  const int first = stnPage * STN_PER_PAGE;
+  for (int i = 0; i < STN_PER_PAGE; i++) {
+    const int idx = first + i;
+    if (idx >= stnCount) break;
+    drawStationRow(i, &stn[idx]);
+  }
+  drawListRow(STN_PER_PAGE, "REFRESH", "look up again", sGrid == STN_PER_PAGE);
+  char hint[48];
+  if (stnPageCount() > 1)
+    snprintf(hint, sizeof(hint), "PAGE %d/%d - TAP A STATION TO SELECT",
+             stnPage + 1, stnPageCount());
+  else
+    snprintf(hint, sizeof(hint), "%d STATION(S) - TAP A STATION TO SELECT",
+             stnCount);
+  drawFooter(hint);
 }
 
 // --- Actions -------------------------------------------------------------
@@ -965,6 +1271,8 @@ void handleTap(int16_t x, int16_t y) {
       case PAGE_TIME:       page = PAGE_MAIN; sGrid = 0; draw(); break;
       case PAGE_TZLIST:     page = PAGE_TIME;  sGrid = 0; draw(); break;
       case PAGE_POSTAL:     page = PAGE_WEATHER; sGrid = 1; draw(); break;
+      case PAGE_STATIONS:   page = PAGE_MAIN;  sGrid = 4; draw(); break;
+      case PAGE_STN_SCAN:   page = PAGE_STATIONS; sGrid = 2; draw(); break;
       case PAGE_SCAN:       page = PAGE_WIFI;  sGrid = 1; draw(); break;
       case PAGE_WIFI:       page = PAGE_MAIN;  sGrid = 3; draw(); break;
       case PAGE_CONFIRM: {   // BACK: nothing has been changed yet.
@@ -992,6 +1300,10 @@ void handleTap(int16_t x, int16_t y) {
       geoPage++;
       sGrid = 0;
       draw();
+    } else if (page == PAGE_STN_SCAN && stnPhase == STN_RESULTS &&
+               stnPage < stnPageCount() - 1) {
+      stnPage++;
+      stnCheckPage();      // checks the new page's observations, draws
     }
     return;
   }
@@ -1008,6 +1320,10 @@ void handleTap(int16_t x, int16_t y) {
       geoPage--;
       sGrid = 0;
       draw();
+    } else if (page == PAGE_STN_SCAN && stnPhase == STN_RESULTS &&
+               stnPage > 0) {
+      stnPage--;
+      stnCheckPage();
     }
     return;
   }
@@ -1048,7 +1364,7 @@ void handleTap(int16_t x, int16_t y) {
   int r = rowAt(y);
   switch (page) {
     case PAGE_MAIN:
-      if (r < 0 || r > 3) return;
+      if (r < 0 || r > 4) return;
       sGrid = r;
       switch (r) {
         case 0: page = PAGE_APPEARANCE; sGrid = 0; draw(); break;
@@ -1057,6 +1373,10 @@ void handleTap(int16_t x, int16_t y) {
         case 3: page = PAGE_WIFI;       sGrid = 1; draw();
               // No scan on entry: it runs from the SCAN page (the
               // SCAN NETWORKS row or the RESCAN row) — on demand only.
+              break;
+        case 4: page = PAGE_STATIONS;   sGrid = 2;
+              draw();                   // the lookup starts from the SCAN button
+              break;
       }
       break;
     case PAGE_APPEARANCE:
@@ -1154,6 +1474,28 @@ void handleTap(int16_t x, int16_t y) {
         if (idx < netCount) joinNet(idx);
       }
       break;
+    case PAGE_STATIONS:
+      // Info page: only the SCAN button (row slot 2) acts; the source line
+      // and the selected-station lines are display-only.
+      if (r != 2) return;
+      sGrid = 2;
+      page = PAGE_STN_SCAN;
+      sGrid = 0;
+      stnDiscover();   // runs the whole lookup, draws itself
+      break;
+    case PAGE_STN_SCAN:
+      if (r == STN_PER_PAGE) {         // REFRESH row
+        sGrid = r;
+        stnDiscover();
+        return;
+      }
+      if (stnPhase != STN_RESULTS) return;   // searching / message: no rows
+      if (r < 0 || r >= STN_PER_PAGE) return;
+      {
+        const int idx = stnPage * STN_PER_PAGE + r;
+        if (idx < stnCount) stnSelect(idx);   // persist + back to STATIONS page
+      }
+      break;
   }
 }
 
@@ -1171,6 +1513,7 @@ void settingsEnterFromPicker() {
   scanning = false;
   geoCount = 0;
   geoPage = 0;
+  stnReset();
   resetTarget = RT_NONE;
   wifiMsg[0] = 0;
   if (!prefs.getString("ssid", savedSsid, sizeof(savedSsid)))

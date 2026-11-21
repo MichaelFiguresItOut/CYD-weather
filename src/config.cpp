@@ -27,7 +27,11 @@ UserSettings userSettings = {
   THEME_BASIC,              // default; loadSettings() overwrites with the persisted value
   false,                    // Fahrenheit
   false,                    // US 12-hour clock
-  0                         // "Thursday 12 November 2026"
+  0,                        // "Thursday 12 November 2026"
+  "",                       // nwsStationId: selected NWS station ("" = none)
+  "",                       // nwsStationName: its NWS display name
+  0.0f,                     // nwsStationDistKm: distance at selection time
+  ""                        // nwsStationProvider: e.g. "ASOS"
 };
 
 // ---- Persistence (NVS namespace "cydwx") ----------------------------------
@@ -48,6 +52,10 @@ UserSettings userSettings = {
 //   "celsius" u8    0 = Fahrenheit, 1 = Celsius
 //   "clock24" u8    0 = US 12-hour, 1 = 24-hour
 //   "datefmt" u8    date-line format (0/1)
+//   "nwsStnId"   str selected NWS station ICAO id ("" = none)
+//   "nwsStnName" str NWS display name of the selected station
+//   "nwsStnDist" f32 distance (km) from the location at selection time
+//   "nwsStnProv" str provider of the selected station (e.g. "ASOS")
 Preferences prefs;   // namespace "cydwx" (also used by wifi_conn.cpp)
 static bool nvsOpen = false;   // set by loadSettings(); save*() no-op without it
 static char tzNameBuf[64];     // home for the loaded/stored timezone name (TimezoneRules.name is a pointer)
@@ -175,6 +183,28 @@ static void loadDisplayPart() {
                 userSettings.use24Hour ? "24h" : "12h", userSettings.dateFormat);
 }
 
+static void loadStationPart() {
+  // No-station ("" id) is a valid saved state, not a missing key, so the
+  // isKey() guards keep a deliberately cleared selection from resurrecting
+  // stale strings.
+  userSettings.nwsStationId[0] = 0;
+  if (prefs.isKey("nwsStnId"))
+    prefs.getString("nwsStnId", userSettings.nwsStationId,
+                    sizeof(userSettings.nwsStationId));
+  userSettings.nwsStationName[0] = 0;
+  if (prefs.isKey("nwsStnName"))
+    prefs.getString("nwsStnName", userSettings.nwsStationName,
+                    sizeof(userSettings.nwsStationName));
+  userSettings.nwsStationDistKm = prefs.getFloat("nwsStnDist", 0.0f);
+  userSettings.nwsStationProvider[0] = 0;
+  if (prefs.isKey("nwsStnProv"))
+    prefs.getString("nwsStnProv", userSettings.nwsStationProvider,
+                    sizeof(userSettings.nwsStationProvider));
+  Serial.printf("[CFG] NWS station: id=\"%s\" name=\"%s\" dist=%.1f km provider=\"%s\"\n",
+                userSettings.nwsStationId, userSettings.nwsStationName,
+                (double)userSettings.nwsStationDistKm, userSettings.nwsStationProvider);
+}
+
 void loadSettings() {
   // NOTE: the second argument of Preferences::begin() is `readOnly`, not
   // "create if missing" — opening the namespace read-only turns every put*
@@ -189,6 +219,7 @@ void loadSettings() {
   loadLocationPart();
   loadTimezonePart();
   loadDisplayPart();
+  loadStationPart();
   // The namespace stays open for the app's lifetime: saves happen later,
   // from touch handlers, and reopening per save would be needless churn.
 }
@@ -259,6 +290,18 @@ void saveDisplaySettings() {
   if (ok) ok = prefs.putUChar("clock24", userSettings.use24Hour ? 1 : 0);
   if (ok) ok = prefs.putUChar("datefmt", userSettings.dateFormat ? 1 : 0);
   if (!ok) Serial.println("[CFG] display settings save failed");
+}
+
+// Selected NWS station (Phase 3). Called when the user picks a station on
+// the Local Weather Station page and when a scan clears the selection (no
+// coverage / no stations).
+void saveNwsStation() {
+  if (!nvsOpen) return;
+  size_t ok = prefs.putString("nwsStnId", userSettings.nwsStationId);
+  if (ok) ok = prefs.putString("nwsStnName", userSettings.nwsStationName);
+  if (ok) ok = prefs.putFloat("nwsStnDist", userSettings.nwsStationDistKm);
+  if (ok) ok = prefs.putString("nwsStnProv", userSettings.nwsStationProvider);
+  if (!ok) Serial.println("[CFG] NWS station save failed");
 }
 
 // ---- Automatic-detection seam (future geolocation / timezone services) ----
