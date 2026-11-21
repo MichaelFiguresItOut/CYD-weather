@@ -30,31 +30,54 @@ long makeUtcTime(int y, int mo, int d, int h, int mi, int s) {
   return daysFromCivil(y, mo, d) * 86400L + h * 3600L + mi * 60L + s;
 }
 
+// Days in a civil month (leap-year aware).
+static int daysInMonth(int y, int m) {
+  static const int dim[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+  if (m == 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0)) return 29;
+  return dim[m - 1];
+}
+
+// Day of month of the (week-th) Sunday. week 5 is the LAST Sunday: the
+// literal 5th Sunday (firstSun + 28) would spill into the next month in a
+// month with only four Sundays, so compute it from the month length.
+static int sundayDay(int y, int m, int week) {
+  int firstSun = 1 + ((7 - dayOfWeek(y, m, 1)) % 7);
+  if (week < 5) return firstSun + 7 * (week - 1);
+  return firstSun + 7 * ((daysInMonth(y, m) - firstSun) / 7);
+}
+
 // Current local offset in seconds (negative = west of UTC) under the
 // configured timezone rules.
+//
+// The start week encodes "Nth Sunday of the month" (1..4) or the last
+// Sunday (5). DST starts at dstStartHourLocal standard-time wall clock
+// (UTC = wall - stdOffsetSec) and ends at dstEndHourLocal DST-time wall
+// clock (UTC = wall - dstOffsetSec).
+//
+// Northern-hemisphere zones (US/UK/EU) start before they end, so the DST
+// window [start, end) lies inside one calendar year. Southern-hemisphere
+// zones (AU/NZ) start in Sept/Oct and end in April, so the window crosses
+// New Year: for a UTC instant in year y the active window is
+// [dstStart(y), dstEnd(y+1)), and instants of year y before dstEnd(y)
+// (Jan..Apr) still belong to the previous year's window.
 long localOffsetSec(time_t utc) {
   const TimezoneRules& tz = userSettings.timezone;
   struct tm t;
   gmtime_r(&utc, &t);
   int y = t.tm_year + 1900;
 
-  // DST start: (dstStartWeek-th) Sunday of dstStartMonth at dstStartHourLocal
-  // wall-clock time, while still on standard time. The epoch of that moment
-  // is the wall time (treated as UTC) minus the standard offset:
-  // utc = local - offset.
-  int startFirstSun = 1 + ((7 - dayOfWeek(y, tz.dstStartMonth, 1)) % 7);
   time_t dstStartUtc = makeUtcTime(y, tz.dstStartMonth,
-                                   startFirstSun + 7 * (tz.dstStartWeek - 1),
+                                   sundayDay(y, tz.dstStartMonth, tz.dstStartWeek),
                                    tz.dstStartHourLocal, 0, 0) - tz.stdOffsetSec;
-
-  // DST end: (dstEndWeek-th) Sunday of dstEndMonth at dstEndHourLocal
-  // wall-clock time, with the clock already on DST time.
-  int endFirstSun = 1 + ((7 - dayOfWeek(y, tz.dstEndMonth, 1)) % 7);
   time_t dstEndUtc   = makeUtcTime(y, tz.dstEndMonth,
-                                   endFirstSun + 7 * (tz.dstEndWeek - 1),
+                                   sundayDay(y, tz.dstEndMonth, tz.dstEndWeek),
                                    tz.dstEndHourLocal, 0, 0) - tz.dstOffsetSec;
 
-  return (utc >= dstStartUtc && utc < dstEndUtc) ? tz.dstOffsetSec : tz.stdOffsetSec;
+  if (dstStartUtc < dstEndUtc) {   // same-year window (US/UK/EU style)
+    return (utc >= dstStartUtc && utc < dstEndUtc) ? tz.dstOffsetSec : tz.stdOffsetSec;
+  }
+  // Year-crossing window (AU/NZ style); dstStartUtc > dstEndUtc there.
+  return (utc >= dstStartUtc || utc < dstEndUtc) ? tz.dstOffsetSec : tz.stdOffsetSec;
 }
 
 bool ntpSynced = false;

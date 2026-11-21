@@ -9,8 +9,12 @@
 //  User settings: defaults = the previously hard-coded behavior.
 //  lat/lon come from local_config.h (gitignored site configuration).
 //  Every setting is restored from NVS at boot (loadSettings()); the defaults
-//  above apply to anything never saved, and the modes default to MANUAL so
-//  the site the firmware was built for is never handed to auto-detection.
+//  above apply to anything never saved. The location defaults to MANUAL so
+//  the site the firmware was built for is never handed to auto-detection;
+//  the timezone defaults to AUTOMATIC (Phase 2B) so a fresh device resolves
+//  its zone from the same site location on the first weather fetch.
+//  loadTimezonePart() migrates existing installs (saved zone, never-saved
+//  mode) to MANUAL, preserving the previously hard-coded behavior.
 // ---------------------------------------------------------------------------
 UserSettings userSettings = {
   LOC_LAT,                  // site latitude (local_config.h)
@@ -19,7 +23,7 @@ UserSettings userSettings = {
   "",                       // postalCode: set on the LOCATION page; may be blank
   "",                       // placeName: resolved by geocoding; may be blank
   TIMEZONE_US_EASTERN,      // US Eastern, US DST rules
-  SettingMode::MANUAL,      // existing behavior: built-for-site timezone
+  SettingMode::AUTOMATIC,   // fresh install: first fetch resolves the zone from the site location
   THEME_BASIC,              // default; loadSettings() overwrites with the persisted value
   false,                    // Fahrenheit
   false,                    // US 12-hour clock
@@ -33,7 +37,7 @@ UserSettings userSettings = {
 //   "locMode" u8    SettingMode of the weather location
 //   "lat"     f32   weather latitude
 //   "lon"     f32   weather longitude
-//   "postcode" str  postal code entered on the LOCATION page ("" = none)
+//   "postcode" str  postal code or city entered on the LOCATION page ("" = none)
 //   "placename" str resolved location display name ("" = not resolved)
 //   "tzMode"  u8    SettingMode of the timezone
 //   "tzName"  str   timezone display name (informational)
@@ -120,7 +124,23 @@ static void loadLocationPart() {
 }
 
 static void loadTimezonePart() {
-  userSettings.timezoneMode = loadMode("tzMode");
+  // "tzMode" is written by every timezone save (manual pick, auto-resolve,
+  // settings-page reset), so a present key is authoritative. A missing key
+  // means a pre-Phase-2B install. Two cases:
+  //   * a zone pick is saved (the settings app writes "tzName" together with
+  //     the rule keys) -> the user chose it: keep MANUAL. Nothing else ever
+  //     changed, so the displayed time is unchanged.
+  //   * nothing is saved -> the device has always run the built-for-site
+  //     default: default to AUTOMATIC. The first weather fetch resolves the
+  //     zone from the same built-for-site coordinates, lands on the same
+  //     catalog zone, and the displayed time is unchanged as well.
+  if (prefs.isKey("tzMode")) {
+    userSettings.timezoneMode = loadMode("tzMode");
+  } else if (prefs.isKey("tzName") || prefs.isKey("tzStd")) {
+    userSettings.timezoneMode = SettingMode::MANUAL;
+  } else {
+    userSettings.timezoneMode = SettingMode::AUTOMATIC;
+  }
   TimezoneRules tz = TIMEZONE_US_EASTERN;
   tz.stdOffsetSec      = prefs.getInt("tzStd", tz.stdOffsetSec);
   tz.dstOffsetSec      = prefs.getInt("tzDst", tz.dstOffsetSec);
@@ -277,12 +297,25 @@ bool applyAutoTimezone(const TimezoneRules& tz) {
   return true;
 }
 
+// Phase 2B: what the last automatic IANA resolution saw, so the TIME ZONE
+// settings page can surface the otherwise-silent "id has no catalog
+// mapping" fallback (the clock keeps running on the last valid rules).
+static char autoIana[40];
+static bool autoUnsupported = false;
+void autoTimezoneRecordIana(const char* iana, bool unsupported) {
+  snprintf(autoIana, sizeof(autoIana), "%s", iana ? iana : "");
+  autoUnsupported = unsupported;
+}
+const char* autoTimezoneIana() { return autoIana; }
+bool autoTimezoneUnsupported() { return autoUnsupported; }
+
 // Phase 2A: the IANA id Open-Meteo reports for the saved coordinates
 // (timezone=auto, e.g. "America/New_York"). Maps it to the catalog zone with
 // matching rules and applies it as the automatic timezone - a no-op under
 // MANUAL mode; an unsupported id leaves the last valid rules in place.
 bool applyAutoTimezoneFromIana(const char* iana) {
   int idx = timezoneIndexByIana(iana);
+  autoTimezoneRecordIana(iana, idx < 0);
   if (idx < 0) {
     Serial.printf("[TZ] unsupported IANA id \"%s\" - keeping last valid rules\n",
                   iana ? iana : "?");

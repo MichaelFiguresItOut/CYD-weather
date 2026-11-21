@@ -54,8 +54,9 @@ struct UserSettings {
   float lat;                      // weather location (Open-Meteo); default from local_config.h
   float lon;                      // weather location (Open-Meteo); default from local_config.h
   SettingMode locationMode;       // how lat/lon were chosen
-  char postalCode[12];            // postal code entered on the LOCATION page
-                                  // (US ZIP, ZIP+4, or international code); "" = none
+  char postalCode[32];            // postal code or city entered on the
+                                  // LOCATION page (US ZIP, ZIP+4, international
+                                  // code, or a city name); "" = none
   char placeName[56];             // resolved location display ("City, Region,
                                   // Country") from geocoding; "" = not resolved
   TimezoneRules timezone;         // local timezone + DST rules; default US Eastern
@@ -77,7 +78,10 @@ extern Preferences prefs;
 // values. Existing-install migration: a setting whose mode was never saved
 // loads as MANUAL (its default value is the value it was always running
 // with), so previously working locations/timezones are never handed to
-// automatic detection.
+// automatic detection. The timezone is the one exception (Phase 2B): a zone
+// that was never saved loads as AUTOMATIC, and the first weather fetch then
+// resolves the same built-for-site zone from the built-for-site
+// coordinates - the displayed time is unchanged either way.
 void loadSettings();
 
 // Explicit per-setting saves — each writes only its own keys, so saving one
@@ -111,6 +115,12 @@ bool applyAutoTimezone(const TimezoneRules& tz);
 // -> catalog zone -> applied as the automatic timezone. No-op under MANUAL
 // mode; an unsupported id keeps the last valid rules.
 bool applyAutoTimezoneFromIana(const char* iana);
+// Phase 2B: last automatic IANA resolution (set by applyAutoTimezoneFromIana
+// and read by the TIME ZONE settings page). autoTimezoneIana() is "" until
+// the first resolution; autoTimezoneUnsupported() is true when that id has
+// no catalog mapping and the last valid rules are still in effect.
+const char* autoTimezoneIana();
+bool autoTimezoneUnsupported();
 
 // ---------------------------------------------------------------------------
 //  App timing + service constants

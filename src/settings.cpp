@@ -5,11 +5,11 @@
 //  Pages (row-tap navigation, every page has "< BACK"):
 //    MAIN         – APPEARANCE / LOCATION / TIME ZONE / WI-FI
 //    APPEARANCE   – theme (cycles 4), °F/°C, 12/24 h, date format
-//    LOCATION     – current location (display), postal code (QWERTY +
+//    LOCATION     – current location (display), ADD LOCATION (QWERTY +
 //                   geocode lookup), latitude / longitude (keypadNumeric)
-//    POSTAL       – postal code lookup: searching status (OPEN-METEO /
-//                   NOMINATIM), then results (tap one to apply) or a
-//                   no-match / failure message
+//    POSTAL       – location lookup (postal code or city): searching
+//                   status (OPEN-METEO / NOMINATIM), then results (tap one
+//                   to apply) or a no-match / failure message
 //    TIME         – time zone (paged list, TZLIST), DST on/off
 //    WIFI         – current network, network scan, manual SSID entry,
 //                   radio on/off, restore build-time network
@@ -72,7 +72,8 @@ constexpr int WIFI_ROW_GAP = 2;
 
 constexpr int TZ_PER_PAGE   = 5;    // TIMEZONES per TIMEZONE list page
 constexpr int SCAN_PER_PAGE = 4;    // networks per SCAN page (row 5 = RESCAN)
-constexpr int GEO_PER_PAGE  = 5;    // postal-code search results (a full page)
+constexpr int GEO_PER_PAGE  = 5;    // location search results per page
+constexpr int GEO_LIST_MAX  = 20;   // search results fetched (paged at GEO_PER_PAGE)
 // Stored scan results (paginated). The ESP32 keeps every AP the passive
 // pass sees; this is how many we copy out of it — 20 was not enough in a
 // busy area and the user's own (weaker or later-channel) network was cut
@@ -117,8 +118,9 @@ char wifiMsg[48] = "";        // transient status ("JOINING...", "FAILED", ...)
 // the red CLEAR / RESET button would clear.
 enum ResetTarget { RT_NONE, RT_LOCATION, RT_TIMEZONE, RT_WIFI };
 int  resetTarget = RT_NONE;
-GeoResult geoResults[GEO_PER_PAGE];  // postal-code search results (current page)
+GeoResult geoResults[GEO_LIST_MAX];  // location search results (all pages)
 int  geoCount = 0;
+int  geoPage = 0;                    // location results list page
 // POSTAL page phase: the page stays up through the whole lookup —
 // searching (service named), results, or a terminal message.
 enum PostalPhase { PP_SEARCHING, PP_RESULTS, PP_MSG };
@@ -189,6 +191,10 @@ void statusText(char* out, int n) {
 int tzPageCount() { return (TIMEZONE_COUNT + TZ_PER_PAGE - 1) / TZ_PER_PAGE; }
 int scanPageCount() {
   int p = (netCount + SCAN_PER_PAGE - 1) / SCAN_PER_PAGE;
+  return (p < 1) ? 1 : p;
+}
+int geoPageCount() {
+  int p = (geoCount + GEO_PER_PAGE - 1) / GEO_PER_PAGE;
   return (p < 1) ? 1 : p;
 }
 
@@ -359,7 +365,7 @@ void drawMain() {
   drawHeader("SETTINGS", false);
   const char* items[4][2] = {
     { "APPEARANCE",  "theme · units · clock · date" },
-    { "LOCATION",    "postal code · lat/lon" },
+    { "LOCATION",    "add location · lat/lon" },
     { "TIME ZONE",   "time zone · daylight saving" },
     { "WI-FI",       "networks · join · add" },
   };
@@ -408,7 +414,7 @@ void drawWeather() {
   char pc[32];
   snprintf(pc, sizeof(pc), "%s",
            userSettings.postalCode[0] ? userSettings.postalCode : "TAP TO ENTER");
-  drawListRow(1, "POSTAL CODE", pc, sGrid == 1);
+  drawListRow(1, "ADD LOCATION", pc, sGrid == 1);
   char lat[24], lon[24];
   snprintf(lat, sizeof(lat), "LATITUDE: %.4f", userSettings.lat);
   snprintf(lon, sizeof(lon), "LONGITUDE: %.4f", userSettings.lon);
@@ -419,11 +425,14 @@ void drawWeather() {
   drawFooter("TAP A ROW TO EDIT");
 }
 
-// POSTAL search results: one row per candidate place, coordinates + region
-// as the value. Tapping a row applies that result (see applyPostal).
+// ADD LOCATION search results: one row per candidate place — the display
+// name "City, Region, CC" (city, state, country; no coordinates — they are
+// not useful for choosing). Paged 5 per page with the same "<"/">" header
+// arrows as the TIME ZONE list when the results fill more than one page.
+// Tapping a row applies that result (see applyLocation).
 void drawPostal() {
   tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
-  drawHeader("POSTAL CODE", false);
+  drawHeader("ADD LOCATION", geoPage < geoPageCount() - 1, nullptr, geoPage > 0);
   if (postalPhase != PP_RESULTS) {
     // Searching / terminal message: centered status, same pattern as the
     // SCAN page's "Scanning for networks...".
@@ -436,15 +445,16 @@ void drawPostal() {
     return;
   }
   for (int i = 0; i < GEO_PER_PAGE; i++) {
-    if (i >= geoCount) break;
-    const GeoResult& g = geoResults[i];
-    char val[48];
-    snprintf(val, sizeof(val), "%.4f, %.4f · %s", g.lat, g.lon, g.meta);
-    drawListRow(i, g.name, val, i == sGrid);
+    int idx = geoPage * GEO_PER_PAGE + i;
+    if (idx >= geoCount) break;
+    drawListRow(i, geoResults[idx].place, "", i == sGrid);
   }
   char hint[40];
-  snprintf(hint, sizeof(hint), "%d RESULT%s · TAP TO APPLY", geoCount,
-           geoCount == 1 ? "" : "S");
+  if (geoPageCount() > 1)
+    snprintf(hint, sizeof(hint), "PAGE %d/%d · TAP TO APPLY", geoPage + 1, geoPageCount());
+  else
+    snprintf(hint, sizeof(hint), "%d RESULT%s · TAP TO APPLY", geoCount,
+             geoCount == 1 ? "" : "S");
   drawFooter(hint);
 }
 
@@ -457,7 +467,17 @@ void drawTime() {
   bool dst = (userSettings.timezone.dstOffsetSec != userSettings.timezone.stdOffsetSec);
   drawListRow(1, "DAYLIGHT SAVING", dst ? "DST ON" : "DST OFF", sGrid == 1);
   drawResetButton("CLEAR / RESET");
-  drawFooter("TAP TO CHANGE");
+  // Footer shows how the zone was chosen. In automatic mode an IANA id with
+  // no catalog mapping is surfaced here instead of silently falling back to
+  // the last valid rules (the id itself goes to the serial log).
+  char footer[44];
+  if (userSettings.timezoneMode == SettingMode::MANUAL)
+    snprintf(footer, sizeof(footer), "MANUAL - TAP TO CHANGE");
+  else if (autoTimezoneUnsupported())
+    snprintf(footer, sizeof(footer), "AUTO - UNSUPPORTED ZONE");
+  else
+    snprintf(footer, sizeof(footer), "AUTO - TAP TO CHANGE");
+  drawFooter(footer);
 }
 
 void drawTzList() {
@@ -803,20 +823,23 @@ static bool isZipPlus4(const char* c) {
   return c[9] == 0;
 }
 
-// POSTAL CODE row: QWERTY entry (letters for international codes), then a
-// geocoding lookup. The entered code is saved on entry; coordinates and
-// the place name are applied only when the user taps a result (0 results
-// / network failure -> the code is kept, a status line is shown, and the
-// coordinates stay put).
-void editPostal() {
-  char code[12];
+// ADD LOCATION row: QWERTY entry — a postal code (US ZIP, ZIP+4, or
+// international code) or a city name ("NEW YORK, NY", "WELLINGTON, NZ").
+// Letters and the "," symbol come from the 123 page of the same keyboard.
+// The entered text is saved on entry; coordinates and the place name are
+// applied only when the user taps a result (0 results / network failure
+// -> the entry is kept, a status line is shown, and the coordinates stay
+// put).
+void editLocation() {
+  char code[32];
   snprintf(code, sizeof(code), "%s", userSettings.postalCode);
-  if (keyboardQwerty("POSTAL CODE", "US ZIP, ZIP+4 OR INTL CODE", code,
+  if (keyboardQwerty("ADD LOCATION", "POSTAL CODE OR CITY", code,
                      sizeof(code)) != KEY_OK) {
     draw();
     return;
   }
-  // Sanitize: uppercase (postal codes are case-insensitive) + trim.
+  // Sanitize: uppercase (postal codes and city names are both
+  // case-insensitive for these lookups) + trim.
   for (char* p = code; *p; p++)
     if (*p >= 'a' && *p <= 'z') *p += (int)('A' - 'a');
   char* s = code;
@@ -826,34 +849,36 @@ void editPostal() {
   while (n > 0 && code[n - 1] == ' ') code[--n] = 0;
   if (code[0] == 0) { draw(); return; }   // empty entry: discard
 
-  // Store the code the user actually entered (ZIP+4 stays ZIP+4); the
-  // lookup query is the base 5 digits for a ZIP+4.
+  // Store the text the user actually entered (ZIP+4 stays ZIP+4); the
+  // lookup query is the base 5 digits for a ZIP+4, everything else
+  // (codes and city names) goes through unchanged.
   snprintf(userSettings.postalCode, sizeof(userSettings.postalCode), "%s", code);
   saveLocation();
 
-  char query[16];
+  char query[32];
   if (isZipPlus4(code)) snprintf(query, sizeof(query), "%.5s", code);
   else                  snprintf(query, sizeof(query), "%s", code);
 
-  // The POSTAL CODE page stays up through the whole lookup: searching
+  // The ADD LOCATION page stays up through the whole lookup: searching
   // status first, then the results (or a terminal message) on the same
   // screen. The header's "< BACK" is the escape hatch at any point.
   setStatus("");
   page = PAGE_POSTAL;
   sGrid = 0;
+  geoPage = 0;
   postalPhase = PP_SEARCHING;
   snprintf(postalMsg, sizeof(postalMsg), "LOOKING UP ON OPEN-METEO...");
   draw();
   delay(50);
-  int nRes = geocodePostalOpenMeteo(query, geoResults, GEO_PER_PAGE);
+  int nRes = geocodePostalOpenMeteo(query, geoResults, GEO_LIST_MAX);
   if (nRes == 0) {
-    // Definite no-match — usually an international code Open-Meteo's index
-    // doesn't cover; Nominatim gets one look. A network failure (-1) is not
-    // retried against a second service.
+    // Definite no-match — usually an international code or a city+state
+    // phrase Open-Meteo's name index doesn't cover; Nominatim gets one
+    // look. A network failure (-1) is not retried against a second service.
     snprintf(postalMsg, sizeof(postalMsg), "FALLING BACK TO NOMINATIM...");
     draw();
     delay(50);
-    nRes = geocodePostalNominatim(query, geoResults, GEO_PER_PAGE);
+    nRes = geocodePostalNominatim(query, geoResults, GEO_LIST_MAX);
   }
   if (nRes > 0) {
     geoCount = nRes;
@@ -863,15 +888,15 @@ void editPostal() {
     snprintf(postalMsg, sizeof(postalMsg), "LOOKUP FAILED - RETRY");
   } else {
     postalPhase = PP_MSG;
-    snprintf(postalMsg, sizeof(postalMsg), "NO MATCH FOR %.11s", code);
+    snprintf(postalMsg, sizeof(postalMsg), "NO MATCH FOR %.23s", code);
   }
   draw();
 }
 
-// Tap on a postal-code search result: apply the coordinates (mode ->
-// MANUAL), keep the entered postal code, store the resolved place name,
+// Tap on a location search result: apply the coordinates (mode ->
+// MANUAL), keep the entered code/city, store the resolved place name,
 // and refetch the weather for the new location.
-void applyPostal(int i) {
+void applyLocation(int i) {
   if (i < 0 || i >= geoCount) return;
   const GeoResult& g = geoResults[i];
   userSettings.lat = g.lat;
@@ -882,7 +907,7 @@ void applyPostal(int i) {
   snprintf(userSettings.placeName, sizeof(userSettings.placeName), "%s",
            g.place[0] ? g.place : g.name);
   saveLocation();
-  Serial.printf("[GEO] applied: place=\"%s\" code=\"%s\"\n",
+  Serial.printf("[GEO] applied: place=\"%s\" entry=\"%s\"\n",
                 userSettings.placeName, userSettings.postalCode);
   fetchWeather();
   page = PAGE_WEATHER;
@@ -913,7 +938,7 @@ int rowAt(int16_t y) {
 }
 
 // Header button under (x,y): 1 = back, 2 = ">", 3 = "<", 0 = none.
-// (Only the TZ page draws the arrows; other pages guard by page.)
+// (Only the paged lists draw the arrows; other pages guard by page.)
 int headerBtnAt(int16_t x, int16_t y) {
   if (y > HDR_H) return 0;
   if (x >= BTN_BACK_X && x < BTN_BACK_X + BTN_BACK_W) return 1;
@@ -946,7 +971,7 @@ void handleTap(int16_t x, int16_t y) {
     }
     return;
   }
-  if (hb == 2) {   // ">" (TZ page / SCAN page)
+  if (hb == 2) {   // ">" (TZ page / SCAN page / location results)
     if (page == PAGE_TZLIST && tzPage < tzPageCount() - 1) {
       tzPage++;
       sGrid = 0;
@@ -954,16 +979,26 @@ void handleTap(int16_t x, int16_t y) {
     } else if (page == PAGE_SCAN && scanPage < scanPageCount() - 1) {
       scanPage++;
       draw();
+    } else if (page == PAGE_POSTAL && postalPhase == PP_RESULTS &&
+               geoPage < geoPageCount() - 1) {
+      geoPage++;
+      sGrid = 0;
+      draw();
     }
     return;
   }
-  if (hb == 3) {   // "<" (TZ page / SCAN page)
+  if (hb == 3) {   // "<" (TZ page / SCAN page / location results)
     if (page == PAGE_TZLIST && tzPage > 0) {
       tzPage--;
       sGrid = 0;
       draw();
     } else if (page == PAGE_SCAN && scanPage > 0) {
       scanPage--;
+      draw();
+    } else if (page == PAGE_POSTAL && postalPhase == PP_RESULTS &&
+               geoPage > 0) {
+      geoPage--;
+      sGrid = 0;
       draw();
     }
     return;
@@ -1040,15 +1075,18 @@ void handleTap(int16_t x, int16_t y) {
       if (r == 0) return;   // Row 0 is display-only: no action, no redraw.
       sGrid = r;
       if (r == 1) {
-        editPostal();
+        editLocation();
         break;
       }
       editCoord(r == 2, x);
       break;
     case PAGE_POSTAL:
       if (postalPhase != PP_RESULTS) return;   // searching / message: no rows
-      if (r < 0 || r >= geoCount) return;
-      applyPostal(r);
+      if (r < 0 || r >= GEO_PER_PAGE) return;
+      {
+        int idx = geoPage * GEO_PER_PAGE + r;
+        if (idx < geoCount) applyLocation(idx);
+      }
       break;
     case PAGE_TIME:
       if (r < 0 || r > 1) return;
@@ -1124,6 +1162,7 @@ void settingsEnterFromPicker() {
   netCount = 0;
   scanning = false;
   geoCount = 0;
+  geoPage = 0;
   resetTarget = RT_NONE;
   wifiMsg[0] = 0;
   if (!prefs.getString("ssid", savedSsid, sizeof(savedSsid)))
