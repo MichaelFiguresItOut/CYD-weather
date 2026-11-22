@@ -7,6 +7,12 @@
 //  one of the weather-outfit files (see selectDogImage() there) and reloads on
 //  every change; compositeRow() does the alpha blend + panel transforms at draw time.
 //
+//  Memory: the decoded image (RGB565 + alpha) is retained in internal RAM. The
+//  two transient decode buffers (compressed idat ~18 KB, inflated raw ~48 KB)
+//  are allocated in PSRAM first, falling back to internal RAM - after the Wi-Fi
+//  driver and mbedTLS have claimed their share, the ~104 KB decode working set
+//  no longer fits in the internal DMA heap in one go (see loadDogImage).
+//
 //  PNG support: non-interlaced, 8-bit samples, color types 0/2/3/6.
 //  IDAT integrity is checked with the Adler-32 of the zlib wrapper; per-chunk
 //  CRCs are not verified (IHDR sanity checks + Adler-32 cover the rest).
@@ -14,6 +20,7 @@
 
 #include <Arduino.h>
 #include <SD.h>
+#include <esp_heap_caps.h>
 #include "dog_image.h"
 
 // puff() inflates a raw DEFLATE stream (no zlib header handling, no checksum).
@@ -142,6 +149,47 @@ bool skip(File& f, size_t n) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+//  PSRAM-first allocation for the transient decode buffers (idat, raw).
+//  Plain free() == heap_caps_free(), so it correctly releases a block from
+//  either pool - the existing free sites need no changes.
+// ---------------------------------------------------------------------------
+
+static constexpr uint32_t kPsramCaps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+
+// Once per boot: report what is actually available before the first decode.
+void reportHeapsOnce() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  multi_heap_info_t spi, dma;
+  heap_caps_get_info(&spi, kPsramCaps);
+  heap_caps_get_info(&dma, MALLOC_CAP_DMA);
+  Serial.printf("[DOG] heap: PSRAM %s (free %u KB, largest block %u KB), "
+                "internal free %lu KB (largest block %u KB)\n",
+                psramFound() ? "detected" : "NOT detected",
+                (unsigned)(spi.total_free_bytes / 1024), (unsigned)(spi.largest_free_block / 1024),
+                (unsigned long)(ESP.getFreeHeap() / 1024), (unsigned)(dma.largest_free_block / 1024));
+}
+
+// Allocate n bytes: PSRAM first, internal heap if PSRAM is missing/full.
+uint8_t* psMallocFirst(size_t n) {
+  uint8_t* p = (uint8_t*)heap_caps_malloc(n, kPsramCaps);
+  return p ? p : (uint8_t*)malloc(n);
+}
+
+// Grow a buffer (preserving contents) with the same preference. On failure the
+// original buffer stays valid, so the caller can free() it unchanged.
+// (heap_caps_realloc may move a block between the PSRAM and internal heaps and
+// reports the new pointer - see esp_heap_caps.h.)
+uint8_t* psReallocFirst(uint8_t* p, size_t n) {
+  uint8_t* np = (uint8_t*)heap_caps_realloc(p, n, kPsramCaps);
+  if (np) return np;
+  np = (uint8_t*)realloc(p, n);   // internal fallback
+  if (np) return np;
+  return nullptr;   // p unchanged
+}
+
 }   // namespace
 
 // Load one outfit file from the SD card root (e.g. "rain_now.png"). Frees any
@@ -160,6 +208,7 @@ bool loadDogImage(const char* path) {
     Serial.printf("[DOG] %s not found on SD card\n", full);
     return false;
   }
+  reportHeapsOnce();
 
   uint8_t sig[8];
   bool ok = readFull(f, sig, 8) && memcmp(sig, "\x89PNG\r\n\x1a\n", 8) == 0;
@@ -203,8 +252,13 @@ bool loadDogImage(const char* path) {
       havePalette = true;
     } else if (memcmp(type, "IDAT", 4) == 0) {
       if (idatLen + len > idatCap) {
-        uint8_t* nb = (uint8_t*)realloc(idat, idatLen + len);   // exact growth
-        if (!nb) { ok = false; Serial.println("[DOG] out of memory"); break; }
+        uint8_t* nb = psReallocFirst(idat, idatLen + len);      // exact growth
+        if (!nb) {
+          ok = false;
+          Serial.printf("[DOG] %s: out of memory (idat buffer, %u KB)\n",
+                        full, (unsigned)((idatLen + len) / 1024));
+          break;
+        }
         idat = nb; idatCap = idatLen + len;
       }
       if (!readFull(f, idat + idatLen, len)) { ok = false; Serial.println("[DOG] read error in IDAT"); break; }
@@ -250,8 +304,13 @@ bool loadDogImage(const char* path) {
     hasAdler = true;
   }
 
-  uint8_t* raw = (uint8_t*)malloc(rawSize);
-  if (!raw) { free(idat); Serial.println("[DOG] out of memory"); return false; }
+  uint8_t* raw = psMallocFirst(rawSize);
+  if (!raw) {
+    free(idat);
+    Serial.printf("[DOG] /%s: out of memory (raw buffer, %u KB)\n",
+                  path, (unsigned)(rawSize / 1024));
+    return false;
+  }
 
   unsigned long destLen = (unsigned long)rawSize;
   unsigned long srcAvail = (unsigned long)(idat + idatLen - defStart);
@@ -281,14 +340,36 @@ bool loadDogImage(const char* path) {
   if (good) {
     img  = (uint16_t*)malloc((size_t)info.w * info.h * sizeof(uint16_t));
     alph = (uint8_t*)malloc((size_t)info.w * info.h);
-    if (!img || !alph) { good = false; why = why ? why : "out of memory"; }
+    if (!img || !alph) {
+      good = false;
+      if (!why) why = img ? "out of memory (alpha buffer)" : "out of memory (rgb buffer)";
+    }
   }
 
   uint8_t* rowA = nullptr, *rowB = nullptr;
   if (good) {
     rowA = (uint8_t*)malloc(rowBytes - 1);
     rowB = (uint8_t*)malloc(rowBytes - 1);
-    if (!rowA || !rowB) { good = false; why = why ? why : "out of memory"; }
+    if (!rowA || !rowB) {
+      good = false;
+      if (!why) why = rowA ? "out of memory (row buffer B)" : "out of memory (row buffer A)";
+    }
+  }
+
+  // Once per boot: internal-heap state at the decode peak - all transient
+  // buffers are live now (idat + raw in PSRAM, img/alpha/rows internal).
+  // This is the moment the pre-PSRAM code exhausted the internal DMA heap.
+  if (good) {
+    static bool peakReported = false;
+    if (!peakReported) {
+      peakReported = true;
+      multi_heap_info_t dma;
+      heap_caps_get_info(&dma, MALLOC_CAP_DMA);
+      Serial.printf("[DOG] heap at decode peak: internal free %lu KB "
+                    "(largest block %u KB)\n",
+                    (unsigned long)(ESP.getFreeHeap() / 1024),
+                    (unsigned)(dma.largest_free_block / 1024));
+    }
   }
 
   if (good) {
@@ -361,7 +442,8 @@ bool loadDogImage(const char* path) {
     uint8_t*  aSmall = scaleAlpha(alph, fw, fh, dw, dh);
     if (!small || !aSmall) {
       free(small); free(aSmall); free(raw); free(idat); free(img); free(alph);
-      Serial.println("[DOG] out of memory"); return false;
+      Serial.printf("[DOG] /%s: out of memory (downscale buffers)\n", path);
+      return false;
     }
     free(img);  img = small;
     free(alph); alph = aSmall;
