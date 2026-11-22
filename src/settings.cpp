@@ -14,8 +14,9 @@
 //    WIFI         – current network, network scan, manual SSID entry,
 //                   radio on/off, restore build-time network
 //    SCAN         – scan results (tap to join, keyboardQwerty password)
-//    STATIONS     – NWS observation-station discovery (Phase 3): nearest
-//                   stations with distance + latest-observation freshness
+//    STATIONS     – NWS station (Phase 3/4): preferred station + automatic
+//                   backup list, and the SCAN lookup (nearest stations
+//                   with distance + latest-observation freshness)
 //    CONFIRM      – CLEAR / RESET confirmation (LOCATION / TIME ZONE /
 //                   WI-FI): < BACK cancels, the red button performs the
 //                   reset and returns to the settings page
@@ -633,11 +634,13 @@ void drawScan() {
   drawFooter(hint);
 }
 
-// STATIONS page (Phase 3): where the weather data comes from (information
-// only, not a button), "and", the selected local NWS station with its
-// details (or "NO LOCAL WEATHER STATION"), and the SCAN button that runs
-// the Local Weather Station lookup. Only the SCAN button (row slot 2) is
-// tappable; the text above it is display-only.
+// STATIONS page (Phase 3/4): the data source (Open-Meteo, display-only),
+// the preferred NWS station with its details and the firmware-managed
+// automatic backup list (Phase 4) - or, when the location has no NWS
+// station, a clear message that Open-Meteo is used because no NWS station
+// is available - plus the SCAN button that runs the Local Weather Station
+// lookup. Only the SCAN button (row slot 2) is tappable; the text around
+// it is display-only.
 void drawStations() {
   tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
   drawHeader("STATIONS", false);
@@ -649,8 +652,8 @@ void drawStations() {
   tft.setTextColor(colBgTxt);
   tft.drawString("WEATHER DATA BY OPEN-METEO.COM", x, 40);
   tft.setTextColor(colDim);
-  tft.drawString("AND", x, 56);
   if (userSettings.nwsStationId[0]) {
+    tft.drawString("PREFERRED STATION", x, 56);
     char line[52], fit[52];
     snprintf(line, sizeof(line), "%.7s - %.39s",
              userSettings.nwsStationId, userSettings.nwsStationName);
@@ -666,10 +669,23 @@ void drawStations() {
     tft.setTextSize(1);
     tft.setTextColor(colDim);
     tft.drawString(det, x, 92);
+    // Phase 4: automatic backups (firmware-managed, not user-configurable),
+    // shown below the SCAN button so the page never grows taller.
+    char bk[40] = "BACKUPS:";
+    int nb = 0;
+    for (int k = 0; k < NWS_BACKUP_MAX; k++) {
+      if (!userSettings.nwsStationBackup[k][0]) continue;
+      char t[9];
+      snprintf(t, sizeof(t), " %s", userSettings.nwsStationBackup[k]);
+      strncat(bk, t, sizeof(bk) - strlen(bk) - 1);
+      nb++;
+    }
+    tft.drawString(nb ? bk : "BACKUPS: NONE", x, 156);
   } else {
+    tft.drawString("NO NWS STATION FOR THIS LOCATION", x, 56);
     tft.setTextSize(2);
     tft.setTextColor(C(0xFF, 0xFF, 0xFF));
-    tft.drawString("NO LOCAL WEATHER STATION", x, 72);
+    tft.drawString("USING OPEN-METEO", x, 72);
   }
   drawListRow(2, "SCAN FOR LOCAL WEATHER STATION", "", sGrid == 2, false,
               112, ROW_H);
@@ -705,10 +721,13 @@ void draw() {
 //  ADD LOCATION search): tap SCAN -> stnDiscover():
 //    wifi check -> points lookup -> station list -> per-page observation
 //    checks (stnCheckPage, up to STN_PER_PAGE requests) -> results.
-//  A row tap selects that station (stnSelect: persist + back to the
-//  STATIONS page); a REFRESH row re-runs the discovery. A definite
+//  A row tap selects that station (stnSelect: persist + record the
+//  automatic backup list from the same scan results (Phase 4) + back to
+//  the STATIONS page); a REFRESH row re-runs the discovery. A definite
 //  "no stations" outcome (outside NWS coverage / empty list) shows the
-//  message briefly, clears the selection, and returns to the STATIONS page.
+//  message briefly, clears the selection and backups, and returns to the
+//  STATIONS page. A temporary failure (network/API) shows a retry message
+//  and leaves the saved selection and backups untouched.
 // ---------------------------------------------------------------------------
 
 void stnClearSelection();   // defined below stnDiscover, which calls it
@@ -811,14 +830,18 @@ void stnDiscover() {
   stnCheckPage();                       // -> results
 }
 
-// The scan found no stations for the current location (outside NWS coverage
-// or empty list): clear the persisted selection so the STATIONS page shows
-// "NO LOCAL WEATHER STATION", and return there.
+// The scan definitively found no stations for the current location
+// (outside NWS coverage or empty list): clear the persisted selection AND
+// its automatic backups (Phase 4) so the STATIONS page shows the
+// Open-Meteo-only messaging, and return there. (Temporary network/API
+// failures never reach here - they keep the saved selection intact.)
 void stnClearSelection() {
   userSettings.nwsStationId[0] = 0;
   userSettings.nwsStationName[0] = 0;
   userSettings.nwsStationDistKm = 0.0f;
   userSettings.nwsStationProvider[0] = 0;
+  for (int k = 0; k < NWS_BACKUP_MAX; k++)
+    userSettings.nwsStationBackup[k][0] = 0;
   saveNwsStation();
   page = PAGE_STATIONS;
   sGrid = 2;
@@ -826,7 +849,8 @@ void stnClearSelection() {
 }
 
 // Row tap on the Local Weather Station page: select that station (persisted
-// to NVS) and return to the STATIONS page with the local station populated.
+// to NVS), record the automatic backup list (Phase 4), and return to the
+// STATIONS page with the local station populated.
 void stnSelect(int i) {
   if (i < 0 || i >= stnCount) return;
   const NwsStation* s = &stn[i];
@@ -835,8 +859,25 @@ void stnSelect(int i) {
   userSettings.nwsStationDistKm = s->distKm;
   snprintf(userSettings.nwsStationProvider, sizeof(userSettings.nwsStationProvider),
            "%s", s->provider);
+  // Phase 4: automatic backups from the SAME scan results (NWS order =
+  // nearest first): up to 3 suitable stations within NWS_BACKUP_MAX_KM,
+  // never the pick itself. A short list simply means fewer backups - a
+  // scan that only yields the pick still selects it.
+  NwsStation tmp[NWS_BACKUP_MAX];
+  const int nBk = nwsBuildFallbackList(stn, stnCount, s->id, tmp, NWS_BACKUP_MAX);
+  for (int k = 0; k < NWS_BACKUP_MAX; k++)
+    snprintf(userSettings.nwsStationBackup[k],
+             sizeof(userSettings.nwsStationBackup[k]), "%s",
+             k < nBk ? tmp[k].id : "");
   saveNwsStation();
-  Serial.printf("[STN] selected: %s (%s) %.1f km\n", s->id, s->name, (double)s->distKm);
+  char bkl[36] = "";
+  for (int k = 0; k < nBk; k++) {
+    char t[9];
+    snprintf(t, sizeof(t), " %s", tmp[k].id);
+    strncat(bkl, t, sizeof(bkl) - strlen(bkl) - 1);
+  }
+  Serial.printf("[STN] selected: %s (%s) %.1f km backups:%s\n",
+                s->id, s->name, (double)s->distKm, bkl);
   page = PAGE_STATIONS;
   sGrid = 2;
   draw();

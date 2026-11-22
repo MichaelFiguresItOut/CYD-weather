@@ -16,7 +16,7 @@ This file is the shared reference for future work: read it first in any new thre
 ## Files
 - `src/main.cpp` — app shell: `setup()`/`loop()`, boot sequence, refresh cadence
 - `src/config.{h,cpp}` — centralized configuration: `UserSettings` (all user-adjustable settings + site defaults), app timing/NTP constants, NVS persistence for every setting (`loadSettings()` + per-setting `save*()`), automatic/manual/unconfigured modes for location and timezone; see the Configuration section
-- firmware modules: `src/display.{h,cpp}` (TFT init), `src/wifi_conn.{h,cpp}` (WiFi credential seam + connect/auto-reconnect + scan), `src/weather.{h,cpp}` (fetch/parse, SD card + dog image), `src/render.{h,cpp}` (themes + per-second partial updates), `src/picker.{h,cpp}` (theme picker + swipe animation), `src/touch.{h,cpp}` (touch zones + gestures), `src/settings.{h,cpp}` (Settings app; see "Settings app (touchscreen)"), `src/keyboard.{h,cpp}` (blocking QWERTY + numeric keypad modals), `src/geocode.{h,cpp}` (location lookup (postal code / city) + reverse geocoding for the LOCATION page), `src/time_util.{h,cpp}` (NTP + timezone), `src/metar.{h,cpp}` / `src/rain_timeline.{h,cpp}` (rain analysis), `src/nws_station.{h,cpp}` (NWS station discovery + latest observations for the STATIONS page), `src/theme_ids.h` (theme indices)
+- firmware modules: `src/display.{h,cpp}` (TFT init), `src/wifi_conn.{h,cpp}` (WiFi credential seam + connect/auto-reconnect + scan), `src/weather.{h,cpp}` (fetch/parse, SD card + dog image), `src/render.{h,cpp}` (themes + per-second partial updates), `src/picker.{h,cpp}` (theme picker + swipe animation), `src/touch.{h,cpp}` (touch zones + gestures), `src/settings.{h,cpp}` (Settings app; see "Settings app (touchscreen)"), `src/keyboard.{h,cpp}` (blocking QWERTY + numeric keypad modals), `src/geocode.{h,cpp}` (location lookup (postal code / city) + reverse geocoding for the LOCATION page), `src/time_util.{h,cpp}` (NTP + timezone), `src/metar.{h,cpp}` / `src/rain_timeline.{h,cpp}` (rain analysis), `src/nws_station.{h,cpp}` (NWS station discovery + latest observations + automatic backup/fallback logic for the STATIONS page), `src/theme_ids.h` (theme indices)
 - `src/nunito_bff.h` — generated Nunito BFF font blobs (masters em9/10/12/13/20/48) shared by themes 1 (SKY), 2 (SPLIT) and 3 (BENTO); regenerate with `tools/make_nunito_bff.py`, verify with `tools/check_bff_space.py`
 - `src/dog_image.{h,cpp}` — SD-card PNG decoder; keeps natural RGB565 + alpha, composites per row at draw time (see Dog outfit images section)
 - `lib/puff/` — vendored Mark Adler `puff.c/h` (public-domain minimal DEFLATE inflater; the core's zlib is not linked into the app)
@@ -318,7 +318,7 @@ Main page: five section tiles.
 | LOCATION | CURRENT LOCATION (display only — "City, Region, CC" plus the postal code when known), ADD LOCATION, LATITUDE, LONGITUDE | ADD LOCATION opens the QWERTY keyboard ("POSTAL CODE OR CITY") — accepts a postal code (US ZIP, ZIP+4, international) or a city name ("NEW YORK, NY", "WELLINGTON, NZ"; letters and the comma come from the keyboard's 123 page); the entered text is uppercased, trimmed, saved immediately, then geocoded via the Open-Meteo Geocoding API with a single Nominatim/OSM fallback request per action for codes or city+state phrases Open-Meteo doesn't index (identifying User-Agent, 1 req/s limit respected); the ADD LOCATION page stays up for the whole lookup (shows `LOOKING UP ON OPEN-METEO...`, then `FALLING BACK TO NOMINATIM...` when Open-Meteo has no match), then lists up to 20 matches on the same screen — one "City, Region, CC" row per place (no coordinates — not useful for choosing), 5 per page with the same `<` / `>` header arrows and `PAGE n/N` footer as the TIME ZONE list when the results fill more than one page — and tapping one applies it: coordinates saved, `locationMode` → MANUAL, resolved name stored (CURRENT LOCATION row), weather refetched; 0 matches or a network failure keeps the entered text and shows `NO MATCH FOR <entry>` / `LOOKUP FAILED - RETRY` on the same page (the header's `< BACK` returns to LOCATION) without touching the coordinates. LATITUDE/LONGITUDE → blocking numeric keypad (range-checked, −90..90 / −180..180; `< BACK` discards, original kept); the keypad opens with the `|` cursor under the digit the finger tapped on the row (tapping the field moves it), digits insert at the cursor, BAK backspaces left of it and DEL deletes right of it — so a coordinate can be fixed in place; on confirming a valid pair: coordinates saved, `locationMode` → MANUAL, a keyless reverse geocode (BigDataCloud) updates CURRENT LOCATION (and the ADD LOCATION row when the service returns a postal code — a failed reverse lookup leaves the name unset but the coordinates stay in use), weather refetched |
 | TIME ZONE | TIME ZONE, DAYLIGHT SAVING | TIME ZONE opens the paginated list (18 zones, 5 per page, `<` / `>` header arrows, `PAGE n/N` footer; opens on the page holding the current zone — rules that match no catalog entry, e.g. a catalog zone with DST toggled off, open page 1 with no row highlighted); the page footer shows how the zone was chosen — `MANUAL - TAP TO CHANGE`, `AUTO - TAP TO CHANGE`, or `AUTO - UNSUPPORTED ZONE` when the automatic IANA id has no catalog mapping (the id itself goes to the serial log, the last valid rules keep running); DAYLIGHT SAVING toggles DST (on = +1 h during the DST window; off = `dstOffsetSec == stdOffsetSec`, window ignored) |
 | WI-FI | CURRENT NETWORK (status), SCAN NETWORKS (scan/join), ADD NETWORK (manual entry), WIFI ON/OFF (power), RESTORE SAVED NETWORK (build-time network) | see below |
-| STATIONS | data source (info), selected station (info), SCAN FOR LOCAL WEATHER STATION | NWS observation-station discovery — see below |
+| STATIONS | data source (info), preferred station (info), automatic backups (info), SCAN FOR LOCAL WEATHER STATION | NWS observation-station discovery + automatic fallback list — see below |
 
 - **Wi-Fi flow** (see also `src/wifi_conn.{h,cpp}` and the scan requirements in
   `docs/CYD-HARDWARE.md`): the WI-FI page shows the connected SSID as plain
@@ -376,13 +376,16 @@ Main page: five section tiles.
   keep the cursor visible. Its bottom row is `123` (letter/symbol pages),
   SPACE and DEL; the shift toggle (`abc`/`ABC`) and BAK sit in the Z-row —
   no duplicated labels in either layout.
-- **STATIONS** (Phase 3, `src/nws_station.{h,cpp}`; US coverage only —
+- **STATIONS** (Phase 3/4, `src/nws_station.{h,cpp}`; US coverage only —
   footer: `NWS STATIONS (US ONLY) - TAP SCAN TO LOOK UP`): the info block
-  shows `WEATHER DATA BY OPEN-METEO.COM` / `AND` and the selected station —
-  `KABC - AMARILLO, GILLETTE FIELD` (size 2, truncated to fit) with
-  `x.x KM AWAY - ASOS` below (provider, e.g. `ASOS`, `ASOS-HFM`) — or
-  `NO LOCAL WEATHER STATION`; the only button is `SCAN FOR LOCAL WEATHER
-  STATION`. The scan (blocking; a message page with `PLEASE WAIT` footer
+  shows `WEATHER DATA BY OPEN-METEO.COM`, then `PREFERRED STATION` and the
+  selected station — `KABC - AMARILLO, GILLETTE FIELD` (size 2, truncated
+  to fit) with `x.x KM AWAY - ASOS` below (provider, e.g. `ASOS`,
+  `ASOS-HFM`) — or, when the location has no NWS station (outside NWS
+  coverage), `NO NWS STATION FOR THIS LOCATION` / `USING OPEN-METEO`;
+  below the SCAN button it shows the firmware-managed automatic backup
+  list (`BACKUPS: KLGA KTEB KEWR`, or `BACKUPS: NONE`). The only button is
+  `SCAN FOR LOCAL WEATHER STATION`. The scan (blocking; a message page with `PLEASE WAIT` footer
   shows each step: `CONNECTING TO WIFI...`, `LOOKING UP NWS POINT...`,
   `FETCHING STATION LIST...`, then `CHECKING KXXX ...` per station) hits
   `api.weather.gov/points/{lat},{lon}` for the gridpoint (404 = outside US
@@ -405,9 +408,15 @@ Main page: five section tiles.
   `NWS_OBS_FRESH_MAX_S`, 90 min) print in the warn color; a failed or not
   yet fetched observation shows `OBSERVATION FETCH FAILED` /
   `OBSERVATION NOT CHECKED` instead. Tapping a station row selects it —
-  id, name, distance and provider are persisted to NVS (`cydwx`) and
-  survive reboot — and returns to the STATIONS page. Selection is
-  informational for now (Phase 5 wires it into the dashboard).
+  id, name, distance and provider are persisted to NVS (`cydwx`) — and the
+  firmware automatically records up to 3 backup stations from the same
+  scan results (`nwsBuildFallbackList()`: nearest suitable stations within
+  100 km, CoCoRaHS excluded, never the pick itself) and persists them in
+  NVS (`cydwx/nwsStnBk`); all of it survives reboot. The backup list is
+  managed internally (never user-configurable) and is rebuilt on every
+  selection. Selection is informational for now (Phase 5 wires it into the
+  dashboard: first usable observation in the order preferred → backups,
+  then Open-Meteo).
 
 ## WiFi
 - Build-time defaults + site location live in `src/local_config.h` (gitignored — copy `src/local_config.h.example` to `src/local_config.h` and fill in your WiFi SSID/password and your site's lat/lon; never commit real values). Runtime credentials are read through one seam, `wifiCredentials()` (`wifi_conn.cpp`), which prefers **user-saved NVS credentials** (`cydwx/ssid` + `cydwx/pass`, written by the Settings > WI-FI page on a successful join — `wifiSaveCredentials()`) and falls back to the build-time values. NVS is plaintext (no encryption; acceptable for this device). Auto-reconnect in `loop()` (`WIFI_RETRY_MS` 10 s check).
@@ -563,7 +572,7 @@ Pi implements:
 
 **Deliverable:** A working station discovery page showing nearby weather stations and useful information about each.
 
-### Phase 4 — Weather station selection and persistence
+### Phase 4 — Weather station selection and persistence (done)
 
 **Goal:** Let users choose which stations supply their current weather observations.
 

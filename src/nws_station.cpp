@@ -419,3 +419,54 @@ void nwsAgeText(long ageSec, char* out, size_t outLen) {
   else
     snprintf(out, outLen, "%ldD %ldH AGO", ageSec / 86400, (ageSec % 86400) / 3600);
 }
+
+// ---------------------------------------------------------------------------
+//  Phase 4: automatic backup stations + observation availability.
+//
+//  Pure logic (no network, no NVS): the settings UI calls
+//  nwsBuildFallbackList() with the station list it just fetched and the
+//  user's pick; the dashboard source selection (Phase 5) will call
+//  nwsFindUsable() with the fallback-ordered list after fetching
+//  observations. Everything here is deterministic and host-testable
+//  (test/nws/test_fallback.py mirrors it 1:1).
+// ---------------------------------------------------------------------------
+
+bool nwsStationSuitable(const NwsStation* st) {
+  if (!st || !st->id[0]) return false;
+  char p[16];
+  snprintf(p, sizeof(p), "%s", st->provider);
+  for (char* c = p; *c; c++) *c = (char)toupper((unsigned char)*c);
+  return !strstr(p, "COCORAH");
+}
+
+int nwsBuildFallbackList(const NwsStation* candidates, int nCandidates,
+                         const char* preferredId, NwsStation* out,
+                         int maxBackups) {
+  if (!candidates || !out || maxBackups < 0) return 0;
+  if (maxBackups > NWS_BACKUP_MAX) maxBackups = NWS_BACKUP_MAX;
+  int n = 0;
+  for (int i = 0; i < nCandidates && n < maxBackups; i++) {
+    const NwsStation* c = &candidates[i];
+    if (!nwsStationSuitable(c)) continue;                       // CoCoRaHS
+    if (c->distKm > NWS_BACKUP_MAX_KM) continue;                 // unrelated
+    if (preferredId && strcmp(c->id, preferredId) == 0) continue;
+    bool dup = false;
+    for (int k = 0; k < n; k++)
+      if (strcmp(out[k].id, c->id) == 0) { dup = true; break; }
+    if (dup) continue;
+    out[n] = *c;
+    n++;
+  }
+  return n;
+}
+
+bool nwsObsUsable(const NwsStation* st) {
+  return st && st->hasObs && st->obsAgeSec >= 0 &&
+         st->obsAgeSec <= NWS_OBS_FRESH_MAX_S;
+}
+
+int nwsFindUsable(const NwsStation* list, int n) {
+  for (int i = 0; i < n; i++)
+    if (nwsObsUsable(&list[i])) return i;
+  return -1;   // no usable NWS station -> Open-Meteo is the source
+}

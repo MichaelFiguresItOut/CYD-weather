@@ -31,7 +31,8 @@ UserSettings userSettings = {
   "",                       // nwsStationId: selected NWS station ("" = none)
   "",                       // nwsStationName: its NWS display name
   0.0f,                     // nwsStationDistKm: distance at selection time
-  ""                        // nwsStationProvider: e.g. "ASOS"
+  "",                       // nwsStationProvider: e.g. "ASOS"
+  { "", "", "" }            // nwsStationBackup: Phase 4 automatic backups
 };
 
 // ---- Persistence (NVS namespace "cydwx") ----------------------------------
@@ -56,6 +57,8 @@ UserSettings userSettings = {
 //   "nwsStnName" str NWS display name of the selected station
 //   "nwsStnDist" f32 distance (km) from the location at selection time
 //   "nwsStnProv" str provider of the selected station (e.g. "ASOS")
+//   "nwsStnBk"   str Phase 4 automatic backups, ";"-joined ICAO ids
+//                (e.g. "KLGA;KTEB;KEWR"; "" = none) - firmware-managed
 Preferences prefs;   // namespace "cydwx" (also used by wifi_conn.cpp)
 static bool nvsOpen = false;   // set by loadSettings(); save*() no-op without it
 static char tzNameBuf[64];     // home for the loaded/stored timezone name (TimezoneRules.name is a pointer)
@@ -200,9 +203,33 @@ static void loadStationPart() {
   if (prefs.isKey("nwsStnProv"))
     prefs.getString("nwsStnProv", userSettings.nwsStationProvider,
                     sizeof(userSettings.nwsStationProvider));
-  Serial.printf("[CFG] NWS station: id=\"%s\" name=\"%s\" dist=%.1f km provider=\"%s\"\n",
+  // Phase 4: automatic backup ids, ";"-joined. Each id is truncated to
+  // fit (7 chars + NUL) and empty tokens are skipped, so a corrupted value
+  // can never overflow a slot or yield a blank entry.
+  char bk[40] = "";
+  if (prefs.isKey("nwsStnBk"))
+    prefs.getString("nwsStnBk", bk, sizeof(bk));
+  for (int k = 0; k < NWS_BACKUP_MAX; k++)
+    userSettings.nwsStationBackup[k][0] = 0;
+  char* savep = nullptr;
+  char* tok = strtok_r(bk, ";", &savep);
+  int nb = 0;
+  while (tok && nb < NWS_BACKUP_MAX) {
+    if (tok[0])
+      snprintf(userSettings.nwsStationBackup[nb++],
+               sizeof(userSettings.nwsStationBackup[nb - 1]), "%s", tok);
+    tok = strtok_r(nullptr, ";", &savep);
+  }
+  char bkl[40] = "";
+  for (int k = 0; k < NWS_BACKUP_MAX; k++) {
+    if (!userSettings.nwsStationBackup[k][0]) continue;
+    if (bkl[0]) strncat(bkl, ";", sizeof(bkl) - strlen(bkl) - 1);
+    strncat(bkl, userSettings.nwsStationBackup[k], sizeof(bkl) - strlen(bkl) - 1);
+  }
+  Serial.printf("[CFG] NWS station: id=\"%s\" name=\"%s\" dist=%.1f km provider=\"%s\" backups=[%s]\n",
                 userSettings.nwsStationId, userSettings.nwsStationName,
-                (double)userSettings.nwsStationDistKm, userSettings.nwsStationProvider);
+                (double)userSettings.nwsStationDistKm, userSettings.nwsStationProvider,
+                bkl);
 }
 
 void loadSettings() {
@@ -292,15 +319,24 @@ void saveDisplaySettings() {
   if (!ok) Serial.println("[CFG] display settings save failed");
 }
 
-// Selected NWS station (Phase 3). Called when the user picks a station on
-// the Local Weather Station page and when a scan clears the selection (no
-// coverage / no stations).
+// Selected NWS station + its automatic backups (Phase 3/4). Called when
+// the user picks a station on the Local Weather Station page and when a
+// scan clears the selection (no coverage / no stations). A failed backup
+// write never erases the preferred station: the id keys are written
+// first, and a partial save only loses the (rebuildable) backup list.
 void saveNwsStation() {
   if (!nvsOpen) return;
   size_t ok = prefs.putString("nwsStnId", userSettings.nwsStationId);
   if (ok) ok = prefs.putString("nwsStnName", userSettings.nwsStationName);
   if (ok) ok = prefs.putFloat("nwsStnDist", userSettings.nwsStationDistKm);
   if (ok) ok = prefs.putString("nwsStnProv", userSettings.nwsStationProvider);
+  char bk[40] = "";
+  for (int k = 0; k < NWS_BACKUP_MAX; k++) {
+    if (!userSettings.nwsStationBackup[k][0]) continue;
+    if (bk[0]) strncat(bk, ";", sizeof(bk) - strlen(bk) - 1);
+    strncat(bk, userSettings.nwsStationBackup[k], sizeof(bk) - strlen(bk) - 1);
+  }
+  if (ok) ok = prefs.putString("nwsStnBk", bk);
   if (!ok) Serial.println("[CFG] NWS station save failed");
 }
 

@@ -71,3 +71,52 @@ int nwsFetchLatestObs(NwsStation* st);
 // Human-readable age for display, all-caps to match the settings UI:
 // "AGE UNKNOWN", "JUST NOW", "5M AGO", "1H 05M AGO", "1D 3H AGO".
 void nwsAgeText(long ageSec, char* out, size_t outLen);
+
+// ---------------------------------------------------------------------------
+//  Phase 4: automatic backup stations + observation availability
+//
+//  When the user picks a preferred station (Settings -> STATIONS), the
+//  firmware automatically records up to NWS_BACKUP_MAX backup stations
+//  from the same NWS station list (nearest first, no extra requests). The
+//  ordered fallback list is [preferred, backup 1..3]; it is persisted in
+//  NVS (config.cpp) and rebuilt on every station selection. The user only
+//  ever sees/configures the preferred station.
+//
+//  A station's latest observation is USABLE when it was fetched
+//  successfully and is no older than NWS_OBS_FRESH_MAX_S. nwsFindUsable()
+//  walks the fallback-ordered list and returns the first usable station,
+//  or -1 = no usable NWS station (the caller then uses Open-Meteo as the
+//  source, e.g. outside NWS coverage or during an NWS outage).
+// ---------------------------------------------------------------------------
+
+// Number of automatic backup stations kept behind the preferred one.
+#define NWS_BACKUP_MAX 3
+// Maximum distance (km from the queried point) for a station to qualify
+// as a backup: NWS orders the list nearest first, so anything beyond this
+// is geographically unrelated rather than a fallback for the same area
+// (sparse rural areas simply end up with fewer backups).
+#define NWS_BACKUP_MAX_KM 100.0f
+
+// Usable as a current-weather source: not a CoCoRaHS (volunteer
+// precipitation) station - those only report during rain/snow, so their
+// "latest" observation can be days old. All other provider types
+// (ASOS, ASOS-HFM, AWOS variants, MesoWest, ...) are automated.
+bool nwsStationSuitable(const NwsStation* st);
+
+// Fill `out` (up to maxBackups entries) with backup stations picked from
+// `candidates` (NWS order = nearest first): suitable, within
+// NWS_BACKUP_MAX_KM, not the preferred station, no duplicate IDs. The
+// result keeps the nearest-first order. Returns the number of backups
+// stored (0 when none qualify).
+int nwsBuildFallbackList(const NwsStation* candidates, int nCandidates,
+                         const char* preferredId, NwsStation* out,
+                         int maxBackups);
+
+// Latest observation usable: fetched successfully, age known (NTP-synced),
+// and no older than NWS_OBS_FRESH_MAX_S. A failed fetch (obsFail) or an
+// unknown age is never usable.
+bool nwsObsUsable(const NwsStation* st);
+
+// First usable station in a fallback-ordered list (preferred first), or
+// -1 when none is usable (Open-Meteo is then the source).
+int nwsFindUsable(const NwsStation* list, int n);

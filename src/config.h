@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include "theme_ids.h"
+#include "nws_station.h"   // NWS_BACKUP_MAX (Phase 4 fallback list size)
 
 // ---------------------------------------------------------------------------
 //  Centralized configuration: all user-adjustable settings (UserSettings),
@@ -66,12 +67,18 @@ struct UserSettings {
   bool use24Hour;                 // clock: false = US 12-hour ("2:35 PM")
   int  dateFormat;                // 0: "Thursday 12 November 2026"  1: "Thursday November 12, 2026"
   // Selected NWS observation station (chosen on the STATIONS settings page);
-  // Phase 4 reads nwsStationId for the main screen's NWS data block.
+  // Phase 5 reads nwsStationId for the main screen's NWS data block.
   // "" = no station selected / none found near the location.
   char nwsStationId[8];           // ICAO identifier, e.g. "KNYC"
   char nwsStationName[40];        // NWS display name of the selected station
   float nwsStationDistKm;         // distance from the location at selection time
   char nwsStationProvider[16];    // e.g. "ASOS", "ASOS-HFM"
+  // Phase 4: automatic NWS backup stations. Firmware-selected when the user
+  // picks the preferred station (the nearest suitable stations from the same
+  // NWS list, within NWS_BACKUP_MAX_KM - see nwsBuildFallbackList());
+  // never user-configurable, rebuilt on every selection. The ordered
+  // fallback list is [nwsStationId, nwsStationBackup[0..count-1]].
+  char nwsStationBackup[NWS_BACKUP_MAX][8];  // ICAO ids, "" = empty slot
 };
 
 extern UserSettings userSettings;
