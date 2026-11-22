@@ -5,7 +5,8 @@ split out of the original monolithic `README.md`. Companion to `README.md`,
 which documents the weather app itself.
 
 ## Board: ESP32-2432S032C-I Cheap Yellow Display ("CYD")
-- ESP32 dual-core, 4 MB flash, CH340 USB serial → **COM4** @ 115200 baud
+- ESP32 dual-core, 4 MB flash, ~4 MB external PSRAM (see "Memory" section
+  below), CH340 USB serial → **COM4** @ 115200 baud
   (**USB-C cable into the PC's front USB-C port** — this is the working setup).
   The old USB-A cable into a rear USB-A port enumerated as COM3 but gave flaky
   "port busy / access denied" errors; don't use it. A stale COM3 entry may
@@ -34,6 +35,76 @@ which documents the weather app itself.
 | Display CS / RST / DC / SCK / MOSI | 15 / 12 / 2 / 14 / 13 |
 | Backlight (PWM) | 27 |
 | Touch SDA / SCL / RST | 33 / 32 / 25 |
+
+## Memory: internal RAM vs PSRAM (~4 MB; verify per board)
+- This board (ESP32-2432S032C-I) has **~4 MB of external PSRAM** in addition
+  to the ESP32's internal SRAM. The verified firmware SDK configuration
+  (arduino-esp32 3.3.12 / ESP-IDF v5.5.5, package
+  `framework-arduinoespressif32-esp32-libs`, `sdkconfig`) enables it:
+  `CONFIG_SPIRAM=y`, `CONFIG_SPIRAM_MODE_QUAD` (Quad SPI mode),
+  `CONFIG_SPIRAM_SPEED_80M`, `CONFIG_SPIRAM_USE_MALLOC=y` — so PSRAM is
+  available through the ESP-IDF heap-capability allocation APIs. Also
+  relevant: `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096` (small allocations
+  stay in internal RAM), `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP` **not set**
+  (Wi-Fi/lwIP buffers come from internal RAM), and
+  `CONFIG_SPIRAM_OCCUPY_HSPI_HOST=y` (see "SPI2/HSPI occupancy" below —
+  conditional, and NOT active on this board).
+  **Capability must be verified for the specific board and build** (hardware
+  PSRAM chip + `CONFIG_SPIRAM` + runtime `psramFound()`); do not assume every
+  CYD variant has identical memory.
+- **SPI2/HSPI occupancy — verified NOT active on this board (2026-11-22):**
+  The `OCCUPY_HSPI_HOST` setting is *conditional* in ESP-IDF v5.5.5
+  (`components/esp_psram/esp32/esp_psram_impl_quad.c`): the "claim HSPI/SPI2
+  to output a solid 80 MHz clock" path runs **only** when the detected PSRAM
+  chip is the legacy 32-Mbit "ver0" part (JEDEC EID byte `0x20`) *and* flash
+  + PSRAM both run at 80 MHz. Any other chip runs in normal mode, clocked
+  from the flash host (SPI1) SCLK — SPI2 is never touched. This board's 4 MB
+  PSRAM is **not** that chip, proven empirically: our SD driver
+  (`SPIClass sdSpi(HSPI)`) hard-resets the SPI2 peripheral and reroutes its
+  SCK in `begin()` (`cores/esp32/esp32-hal-spi.c`) — if the clock hack were
+  active, PSRAM would lose its 80 MHz clock and the first decode-buffer
+  write (PSRAM, ~18/48 KB, *after* `SD.begin()`) would hang into a watchdog
+  reset. The board instead decodes and renders the dog images normally.
+  (A PSRAM SPI2 claim would not even block the SD driver — Arduino's SPI
+  bypasses `spi_bus_initialize` and the periph-claim check — it would only
+  break PSRAM.) Consequences:
+  - The SD card on HSPI/SPI2 does **not** conflict with PSRAM on this
+    board; `SPIRAM_OCCUPY_HSPI_HOST` is inert here.
+  - Latent risk on *other* CYD units only: CYD comes in WROOM (no PSRAM) and
+    WROVER (4 MB PSRAM) variants, and the PSRAM part can differ per batch.
+    On a unit with the legacy ver0 4 MB chip, this firmware would claim SPI2
+    at boot and the SD driver would kill the PSRAM clock after `SD.begin()`
+    → the first image load hangs (watchdog reset loop). Fix for such a unit:
+    set `SPIRAM_SPEED_40M` in the build (at 40 MHz even ver0 chips share the
+    flash host clock, so no SPI2 claim).
+- **Allocation approach** (as implemented in `src/dog_image.cpp`):
+  - Fresh buffers: `heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)`.
+  - Dynamically growing buffers: `heap_caps_realloc(p, n, MALLOC_CAP_SPIRAM |
+    MALLOC_CAP_8BIT)` — preserves contents, may move the block between the
+    PSRAM and internal heaps (use the returned pointer); on failure the
+    original block is left unchanged.
+  - Safe fallback: a PSRAM-first helper falls back to ordinary
+    `malloc()`/`realloc()` when PSRAM is unavailable or the allocation
+    fails, so the code also runs on boards without PSRAM.
+  - Ordinary `free()` remains valid for buffers from either pool
+    (`free()` ≡ `heap_caps_free()`).
+- **Current usage:** the PNG decoder's large *transient* buffers — compressed
+  IDAT (~18 KB) and inflated raw image data (~48 KB), see "SD card PNG
+  pipeline" — are allocated PSRAM-first with internal fallback
+  (`psMallocFirst()` / `psReallocFirst()`). The *retained* decoded buffers
+  (RGB565 ~24 KB + alpha ~12 KB) and the small row/downscale buffers stay in
+  internal RAM. Reason: after Wi-Fi + mbedTLS initialization the internal
+  DMA heap's largest contiguous block is only ~63 KB, so the decoder's ~104
+  KB peak working set no longer fit there (the 2026-11-22 "dog out of
+  memory" diagnosis — README, "Dog outfit images"). PSRAM absorbs the
+  transient buffers and the internal peak drops to ~37 KB.
+- **Guideline for future code:** internal RAM is the scarce, fast resource —
+  Wi-Fi, networking, DMA and other time-sensitive allocations must keep
+  working there; PSRAM is slower than internal RAM, so allocation placement
+  should reflect the workload and hardware requirements: put large,
+  short-lived, sequentially accessed buffers in PSRAM when that relieves
+  internal-heap headroom, and keep latency-sensitive or DMA-touching buffers
+  in internal RAM.
 
 ## WiFi radio: scanning (cost real debugging time — read before touching `wifi_conn.cpp`)
 - **The ESP32 is 2.4 GHz only.** Phones enumerate 2.4 + 5 (+6) GHz and merge
@@ -196,7 +267,10 @@ PNGs needs (`src/dog_image.cpp`; verified pixel-exact by `test/test_decoder.py`)
   unfilter (None/Sub/Up/Average/Paeth) → **natural RGB565 + per-pixel alpha**
   buffers. Color types 0, 2, 3, 6 supported; interlaced PNGs rejected. Images
   larger than the 96x128 corner zone are area-averaged down to fit (all outfits
-  are exactly 95x128 → no scaling). Decoded buffers: ~24 KB in RAM.
+  are exactly 95x128 → no scaling). Memory placement (2026-11-22): retained
+  buffers (natural RGB565 ~24 KB + alpha ~12 KB) live in internal RAM; the
+  transient decode buffers (compressed `idat` ~18 KB, inflated `raw` ~48 KB)
+  are allocated PSRAM-first with internal fallback — see "Memory".
 - **Chunk-type comparison — hard-learned (2026-11-20, cost a whole debug session)**:
   PNG chunk types are fixed 4-byte fields, NOT C strings. The decoder must use
   `memcmp(type, "IHDR", 4)` etc. The decoder had carried
@@ -239,7 +313,11 @@ PNGs needs (`src/dog_image.cpp`; verified pixel-exact by `test/test_decoder.py`)
   EOF on every file); a 4 MHz "extra margin" experiment did not fix it and
   correlated with failing boots, so 16 MHz was kept. The failures look like
   marginal card contact rather than clock rate — the 3× `SD.begin()` / 3× load
-  retries in `weatherInitSdAndDog()` are the mitigation.
+  retries in `weatherInitSdAndDog()` are the mitigation. SPI-host
+  compatibility verified 2026-11-22: PSRAM does **not** occupy SPI2 on this
+  board (it is not the legacy EID-`0x20` 32-Mbit chip that would trigger the
+  80+80 MHz occupancy), so the SD card's use of HSPI is conflict-free — see
+  "Memory" ("SPI2/HSPI occupancy").
 - **Image pixels go through BOTH panel quirks** (this cost a debugging session):
   1. Panel inversion: displayed = ~written, same as all other drawing.
   2. LGFX v1 `pushImage(x,y,w,h,const uint16_t*)` with `_swapBytes=false`
