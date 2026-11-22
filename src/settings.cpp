@@ -135,6 +135,9 @@ int  geoPage = 0;                    // location results list page
 enum PostalPhase { PP_SEARCHING, PP_RESULTS, PP_MSG };
 PostalPhase postalPhase = PP_MSG;
 char postalMsg[48] = "";
+// PP_MSG color override: true = neutral (a successful Phase 6 station-
+// update outcome); false = the warn color (failures / no-station messages).
+bool postalMsgGood = false;
 // STATIONS page state (Phase 3, NWS observation-station discovery). Same
 // pattern as POSTAL: the page stays up through the lookup. Latest
 // observations are fetched per page (up to STN_PER_PAGE requests) when the
@@ -460,7 +463,9 @@ void drawPostal() {
     tft.setTextDatum(MC_DATUM);
     int msgSz = (txtW(postalMsg, 2) <= 300) ? 2 : 1;   // long messages fit size 1
     tft.setTextSize(msgSz);
-    tft.setTextColor(postalPhase == PP_SEARCHING ? colBgTxt : colWarn);
+    // PP_MSG is warn-colored (failure) except when postalMsgGood (a
+    // successful Phase 6 station-update outcome).
+    tft.setTextColor(postalPhase == PP_SEARCHING || postalMsgGood ? colBgTxt : colWarn);
     tft.drawString(postalMsg, 160, 108);
     drawFooter(postalPhase == PP_SEARCHING ? "" : "TAP < BACK TO GO BACK");
     return;
@@ -669,6 +674,21 @@ void drawStations() {
     tft.setTextSize(1);
     tft.setTextColor(colDim);
     tft.drawString(det, x, 92);
+    // Phase 6: the source that actually supplied the last successful
+    // dashboard update — a backup id when the preferred's observation was
+    // stale or unavailable, Open-Meteo when none was. Shown only after the
+    // first successful fetch (wx.valid) so it never shows a guess.
+    if (wx.valid) {
+      char nowSrc[40];
+      if (wx.nwsSourceId[0])
+        snprintf(nowSrc, sizeof(nowSrc), "NOW USING: %s%s", wx.nwsSourceId,
+                 strcmp(wx.nwsSourceId, userSettings.nwsStationId) != 0
+                     ? " (BACKUP)" : "");
+      else
+        snprintf(nowSrc, sizeof(nowSrc), "NOW USING: OPEN-METEO");
+      tft.setTextColor(wx.nwsSourceId[0] ? C(0xFF, 0xFF, 0xFF) : colDim);
+      tft.drawString(nowSrc, x, 104);   // size 1, above the SCAN row (y=112)
+    }
     // Phase 4: automatic backups (firmware-managed, not user-configurable),
     // shown below the SCAN button so the page never grows taller.
     char bk[40] = "BACKUPS:";
@@ -1223,6 +1243,7 @@ void editLocation() {
   page = PAGE_POSTAL;
   sGrid = 0;
   geoPage = 0;
+  postalMsgGood = false;
   postalPhase = PP_SEARCHING;
   snprintf(postalMsg, sizeof(postalMsg), "LOOKING UP ON OPEN-METEO...");
   draw();
@@ -1250,9 +1271,120 @@ void editLocation() {
   draw();
 }
 
+// ---------------------------------------------------------------------------
+//  Phase 6: automatic NWS station update after a confirmed location
+//  change. Runs on the ADD LOCATION page (PAGE_POSTAL) after
+//  applyLocation() has saved the new coordinates and before returning to
+//  the LOCATION page — the centered status lines use the same pattern as
+//  the Open-Meteo location lookup above.
+//
+//  1. The previous station selection (preferred + automatic backups) is
+//     invalidated first: it belongs to the old location and must not be
+//     reused for the new one.
+//  2. Discovery runs: the NWS points lookup, the station list, then the
+//     first SUITABLE station (NWS order = nearest first) becomes the
+//     preferred and the automatic backups are recorded from the same list
+//     — exactly what a SCAN selection would persist. The user can still
+//     change the pick afterwards (STATIONS page -> SCAN -> tap a row).
+//  3. The outcome is shown briefly, then applyLocation() returns to the
+//     LOCATION page:
+//       stations found       "NWS: KLGA + 3 BACKUPS" (neutral color)
+//       outside coverage /
+//       empty list           "NO NWS STATIONS - USING OPEN-METEO"
+//       no suitable station  "NO SUITABLE STATION - OPEN-METEO"
+//       transient failure    "STATION UPDATE FAILED - RETRY" — the SCAN
+//       (network / API)       button on the STATIONS page re-runs the
+//                             discovery; a failure never touches the
+//                             coordinates or any unrelated setting.
+// ---------------------------------------------------------------------------
+
+// Centered ADD LOCATION status line: progress (PP_SEARCHING) or the final
+// outcome (PP_MSG, shown for 2 s so it is readable before the page leaves).
+void postalStatus(const char* m, bool done, bool good) {
+  postalPhase = done ? PP_MSG : PP_SEARCHING;
+  postalMsgGood = good;
+  snprintf(postalMsg, sizeof(postalMsg), "%s", m);
+  draw();
+  delay(done ? 2000 : 50);
+}
+
+void autoDiscoverStations() {
+  // 1) Invalidate the previous selection (it belongs to the old location).
+  userSettings.nwsStationId[0] = 0;
+  userSettings.nwsStationName[0] = 0;
+  userSettings.nwsStationDistKm = 0.0f;
+  userSettings.nwsStationProvider[0] = 0;
+  for (int k = 0; k < NWS_BACKUP_MAX; k++)
+    userSettings.nwsStationBackup[k][0] = 0;
+  saveNwsStation();
+  Serial.println("[STN] location changed: previous station selection cleared");
+
+  postalStatus("UPDATING NWS STATIONS...", false, false);
+  if (!wifiEnabled()) { postalStatus("TURN WIFI ON", true, false); return; }
+  postalStatus("CONNECTING TO WIFI...", false, false);
+  if (!wifiEnsureConnected()) {
+    postalStatus("WIFI NOT CONNECTED", true, false);
+    return;
+  }
+  postalStatus("LOOKING UP NWS POINT...", false, false);
+  char stationsUrl[64];
+  const int r = nwsPointsLookup(userSettings.lat, userSettings.lon,
+                                stationsUrl, sizeof(stationsUrl));
+  if (r == -2) {   // 404: outside NWS coverage
+    postalStatus("NO NWS STATIONS - USING OPEN-METEO", true, false);
+    return;
+  }
+  if (r != 0) { postalStatus("STATION UPDATE FAILED - RETRY", true, false); return; }
+  postalStatus("FETCHING STATION LIST...", false, false);
+  // The station list (and with it the cached observation state) may have
+  // changed: drop it before parsing, same as stnDiscover().
+  for (int i = 0; i < STN_MAX; i++) {
+    stn[i].hasObs = false;
+    stn[i].obsFail = false;
+  }
+  stnCount = nwsFetchStations(stationsUrl, stn, STN_MAX);
+  if (stnCount < 0)  { postalStatus("STATION UPDATE FAILED - RETRY", true, false); return; }
+  if (stnCount == 0) { postalStatus("NO NWS STATIONS - USING OPEN-METEO", true, false); return; }
+
+  // 2) First suitable station (NWS order = nearest first) -> preferred.
+  int pick = -1;
+  for (int i = 0; i < stnCount; i++)
+    if (nwsStationSuitable(&stn[i])) { pick = i; break; }
+  if (pick < 0) { postalStatus("NO SUITABLE STATION - OPEN-METEO", true, false); return; }
+
+  const NwsStation* s = &stn[pick];
+  snprintf(userSettings.nwsStationId, sizeof(userSettings.nwsStationId), "%s", s->id);
+  snprintf(userSettings.nwsStationName, sizeof(userSettings.nwsStationName), "%s", s->name);
+  userSettings.nwsStationDistKm = s->distKm;
+  snprintf(userSettings.nwsStationProvider, sizeof(userSettings.nwsStationProvider),
+           "%s", s->provider);
+  NwsStation tmp[NWS_BACKUP_MAX];
+  const int nBk = nwsBuildFallbackList(stn, stnCount, s->id, tmp, NWS_BACKUP_MAX);
+  for (int k = 0; k < NWS_BACKUP_MAX; k++)
+    snprintf(userSettings.nwsStationBackup[k],
+             sizeof(userSettings.nwsStationBackup[k]), "%s",
+             k < nBk ? tmp[k].id : "");
+  saveNwsStation();
+  char bkl[36] = "";
+  for (int k = 0; k < nBk; k++) {
+    char t[9];
+    snprintf(t, sizeof(t), " %s", tmp[k].id);
+    strncat(bkl, t, sizeof(bkl) - strlen(bkl) - 1);
+  }
+  Serial.printf("[STN] auto-selected after location change: %s (%s) %.1f km backups:%s\n",
+                s->id, s->name, (double)s->distKm, bkl);
+
+  // 3) Brief result, then applyLocation() returns to the LOCATION page.
+  char m[40];
+  if (nBk > 0) snprintf(m, sizeof(m), "NWS: %s + %d BACKUPS", s->id, nBk);
+  else         snprintf(m, sizeof(m), "NWS: %s", s->id);
+  postalStatus(m, true, true);
+}
+
 // Tap on a location search result: apply the coordinates (mode ->
 // MANUAL), keep the entered code/city, store the resolved place name,
-// and refetch the weather for the new location.
+// update the NWS station list for the new location (Phase 6), and refetch
+// the weather for the new location.
 void applyLocation(int i) {
   if (i < 0 || i >= geoCount) return;
   const GeoResult& g = geoResults[i];
@@ -1266,6 +1398,10 @@ void applyLocation(int i) {
   saveLocation();
   Serial.printf("[GEO] applied: place=\"%s\" entry=\"%s\"\n",
                 userSettings.placeName, userSettings.postalCode);
+  // Phase 6: station update BEFORE returning to the LOCATION page — it
+  // stays on this page with the centered status lines, then applyLocation
+  // continues with the weather refetch (which uses the new station chain).
+  autoDiscoverStations();
   fetchWeather();
   page = PAGE_WEATHER;
   sGrid = 0;
