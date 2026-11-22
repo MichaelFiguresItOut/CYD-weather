@@ -85,7 +85,8 @@ current weather. One of 17 RGBA PNGs on the SD card root is selected by
   specific reason instead of staying silent — `[DOG] /<path>: read error walking
   chunks (truncated file or flaky SD read?)`, `read error in chunk CRC (flaky SD
   read?)`, `inflate size mismatch`, `bad scanline filter byte`, `bad palette index`,
-  or `out of memory`, plus the named checks (`bad IHDR`, `inflate failed rc=...`,
+  or per-buffer `out of memory (<buffer>)` (see **Decoder memory** below), plus
+  the named checks (`bad IHDR`, `inflate failed rc=...`,
   `Adler-32 mismatch`, `chunk too large`). The SD-contact flake matters: a single
   bad read can leave the card in a bad state for the rest of the boot (in-boot
   retries keep failing until a full reset re-inits it — observed right after
@@ -93,6 +94,58 @@ current weather. One of 17 RGBA PNGs on the SD card root is selected by
   several fetches until a reboot). The 3× per-load retry in `refreshDogImage()`
   self-heals later in a clean boot, so a transient boot-time failure usually
   clears itself on the next fetch.
+- **Decoder memory (2026-11-22): PSRAM for the transient buffers** — the
+  captured "dog vanishes after the first fetch" incident was diagnosed as
+  internal-heap exhaustion, *not* an SD read failure (the card initialized
+  and the image data was read and inflated — the failure was the allocation
+  of the decode buffers):
+  - At boot the `error.png` load succeeded because the decoder ran *before*
+    Wi-Fi initialization. Once Wi-Fi, HTTPS/mbedTLS and JSON processing held
+    their share of the internal heap, the decoder's ~104 KB peak working set
+    no longer fit: total free heap looked sufficient (~122 KB), but the
+    largest contiguous block (~63 KB, from the captured boot log) was too
+    small for the next allocation as the buffers accumulated. The
+    `error.png` fallback failed the same way — it needs essentially the same
+    working set. (This documents the *captured* incident; earlier
+    missing-dog incidents may have had other causes — see the SD card
+    section below.)
+  - Peak working set (current 95×128 RGBA outfits; the allocations overlap
+    while decoding):
+
+    | Buffer | Approx. size |
+    |---|---:|
+    | Compressed IDAT (`idat`) | 18 KB |
+    | Raw/unfiltered image data (`raw`) | 48 KB |
+    | RGB565 output image (`img`) | 24 KB |
+    | Alpha buffer (`alpha`) | 12 KB |
+    | Row buffers (×2) | 760 bytes total |
+
+  - **Fix** (`src/dog_image.cpp`): the two *transient* buffers now request
+    PSRAM first — `idat` grows via PSRAM-aware reallocation as compressed
+    IDAT data arrives, and `raw` is allocated in PSRAM for the inflater's
+    uncompressed image data. `img`, `alpha`, the row buffers and the
+    downscale buffers stay in internal RAM (they are retained between
+    renders or tiny). If PSRAM is unavailable or a PSRAM allocation fails,
+    the helpers (`psMallocFirst()`/`psReallocFirst()`) fall back to ordinary
+    internal allocation, so boards without PSRAM behave as before. Effect:
+    the internal-heap peak drops from ~104 KB to ~37 KB — the large
+    temporary buffers now use the board's ~4 MB PSRAM instead of competing
+    with Wi-Fi and the other internal-RAM users (configuration details:
+    `docs/CYD-HARDWARE.md`, "Memory"). Decoding behavior, dimensions, output
+    quality, SD operations and cleanup are unchanged.
+  - **Diagnostics:** once per boot, before the first decode:
+    `[DOG] heap: PSRAM detected (free … KB, largest block … KB), internal
+    free … KB (largest block … KB)` (`PSRAM NOT detected` if absent), and
+    `[DOG] heap at decode peak: internal free … KB (largest block … KB)`
+    while all decode buffers are live. Every OOM now names the buffer:
+    `out of memory (idat buffer, … KB)`, `(raw buffer, … KB)`, `(rgb
+    buffer)`, `(alpha buffer)`, `(row buffer A/B)`, `(downscale buffers)`.
+    These separate allocation failures from SD communication failures
+    (which show up as `[SD]` / `read error …` lines).
+  - **Verified (2026-11-22):** `pio run` succeeds with no warnings;
+    `test/test_decoder.py` passes all 17 dog PNGs (206,720 pixels checked);
+    the existing NWS tests pass; the firmware was flashed successfully and
+    the dog images were visibly present afterward.
 - **Transient SD failures**: if the dog is missing but everything else renders,
   check serial for `[SD]`/`[DOG]` lines first (card seating/contact was one such
   case — a plain reboot fixed it; `test/capture_boot.py` resets + captures).
@@ -564,8 +617,12 @@ CRC fix does not address our read path.
   command-response failures, CMD12 failures, or electrical interference.
 - Whether the card is physically losing communication or entering a protocol
   state from which the current driver cannot recover.
-- The actual cause of the most recent incident, because its serial output was
-  not captured.
+- The actual cause of earlier incidents whose serial output was not captured.
+  The most recent incident **was** captured and diagnosed (2026-11-22) as an
+  internal-heap out-of-memory failure in the PNG decoder — not an SD
+  communication failure; see the Dog outfit images section ("Decoder
+  memory"). This section and its diagnostics remain valid for future
+  genuine SD failures.
 
 **Diagnostic logging gap (closed 2026-11-22):** with `CORE_DEBUG_LEVEL=0`
 the driver's own error messages are compiled out, and the two data-phase
