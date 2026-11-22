@@ -35,10 +35,13 @@ struct NwsStation {
   float distKm;        // distance from the queried point (NWS-provided)
   char  provider[16];  // e.g. "ASOS", "ASOS-HFM"
   // Latest observation - only valid after nwsFetchLatestObs() succeeded:
-  bool  hasObs;        // true when obsAgeSec / obsTempC / obsText are valid
+  bool  hasObs;        // true when the obs fields below are valid
   bool  obsFail;       // true when the per-station fetch failed (network/parse)
   long  obsAgeSec;     // age in seconds at fetch time; -1 = unknown (no NTP)
-  float obsTempC;      // latest temperature in °C; NaN when unreported
+  float obsTempC;      // latest temperature in °C (unit-normalized); NaN when unreported
+  float obsWindMph;    // latest wind speed in mph (unit-normalized); NaN when unreported
+  float obsRelHum;     // latest relative humidity in %; NaN when unreported
+  long  obsEpochSec;   // observation timestamp (UTC epoch seconds); 0 when unparseable
   char  obsText[24];   // e.g. "Clear"; "" when unreported
 };
 
@@ -63,7 +66,9 @@ int nwsPointsLookup(float lat, float lon, char* stationsUrl, size_t urlLen);
 int nwsFetchStations(const char* stationsUrl, NwsStation* out, int maxStations);
 
 // GET /stations/{st->id}/observations/latest. On success fills
-// hasObs / obsAgeSec / obsTempC / obsText (obsAgeSec = -1 without NTP).
+// hasObs / obsAgeSec / obsEpochSec / obsTempC / obsWindMph / obsRelHum /
+// obsText (obsAgeSec = -1 without NTP; NWS reports temperature and wind
+// speed with a unitCode - both are normalized to °C / mph).
 // Returns 0 on success, -1 network/HTTP failure (obsFail set), -3 no
 // observation or unparseable response (obsFail set).
 int nwsFetchLatestObs(NwsStation* st);
@@ -120,3 +125,34 @@ bool nwsObsUsable(const NwsStation* st);
 // First usable station in a fallback-ordered list (preferred first), or
 // -1 when none is usable (Open-Meteo is then the source).
 int nwsFindUsable(const NwsStation* list, int n);
+
+// ---------------------------------------------------------------------------
+//  Phase 5: NWS temperature + feels-like as the dashboard reading
+//
+//  The dashboard's current temperature and feels-like come from the first
+//  station in the fallback-ordered list (preferred, then backups) whose
+//  latest observation is both usable (nwsObsUsable: fresh, NTP-synced age)
+//  and carries a valid temperature (nwsObsHasValidTemp). If none qualifies,
+//  the Open-Meteo reading stays. Feels-like is NWS wind chill (T <= 50F,
+//  wind >= 3 mph) or NWS heat index (T >= 80F, RH >= 40%), else the air
+//  temperature itself - always computed from the same observation, never
+//  mixed with Open-Meteo's apparent temperature. All three functions below
+//  are pure (no network/NVS) and host-testable (test/nws/test_feels.py).
+// ---------------------------------------------------------------------------
+
+// True when the observation carries a real temperature value.
+bool nwsObsHasValidTemp(const NwsStation* st);
+
+// NWS wind-chill temperature (F) for air temp (F) and wind speed (mph).
+// The published formula is valid for wind >= 3 mph; callers check that.
+float nwsWindChillF(float tempF, float windMph);
+
+// NWS heat index (F) (Rothfusz regression + the published low-humidity
+// and high-humidity adjustments) for air temp (F) and relative humidity (%).
+float nwsHeatIndexF(float tempF, float relHumPct);
+
+// NWS "feels-like" (F) for one observation: wind chill when temp <= 50F
+// and wind >= 3 mph, heat index when temp >= 80F and RH >= 40%, otherwise
+// the air temperature itself. A NaN wind/RH input makes the corresponding
+// term inapplicable (falls through to air temperature).
+float nwsFeelsLikeF(float tempF, float windMph, float relHumPct);

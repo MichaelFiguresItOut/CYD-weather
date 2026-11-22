@@ -6,6 +6,7 @@
 #include <puff.h>
 #include "weather.h"
 #include "metar.h"
+#include "nws_station.h"
 #include "rain_timeline.h"
 #include "time_util.h"
 #include "wifi_conn.h"
@@ -273,7 +274,25 @@ bool fetchWeather() {
   wx.description  = wmoText(wCode);
   wx.wmoCode      = wCode;
   wx.lastUpdateMs = millis();
-  wx.lastUpdateEpoch = time(nullptr);   // 0/garbage until NTP has synced
+  // Data timestamp: Open-Meteo's `current.time` is the model step's local
+  // wall clock ("YYYY-MM-DDTHH:MM", the response's timezone); subtract the
+  // response's utc_offset_seconds to get the UTC epoch of the model data
+  // shown. Falls back to the fetch time when either field is missing. An
+  // NWS station observation time replaces this later in this same fetch.
+  {
+    const char* ct = doc["current"]["time"].as<const char*>();
+    JsonVariant off = doc["utc_offset_seconds"];
+    int y, mo, d, h, mi;
+    if (ntpIsSynced() && ct && !off.isNull() &&
+        sscanf(ct, "%d-%d-%dT%d:%d", &y, &mo, &d, &h, &mi) == 5) {
+      wx.omModelEpoch =
+          (time_t)(makeUtcTime(y, mo, d, h, mi, 0) - off.as<long>());
+      wx.lastUpdateEpoch = wx.omModelEpoch;
+    } else {
+      wx.omModelEpoch = 0;                  // model step time unavailable -> age shows "--"
+      wx.lastUpdateEpoch = time(nullptr);   // 0/garbage until NTP has synced
+    }
+  }
 
   // ---- Rain status: RRFS 15-min periods + hourly extension (needs NTP for "now") ----
   bool rainingNow = (!isnan(curRain) && curRain > 0.0f) || wmoIsRain(wCode);   // model fallback
@@ -411,12 +430,55 @@ bool fetchWeather() {
     wx.nearbyStns[0] = '\0';
   }
 
-  Serial.printf("[WX] %.1f F feels %.1f F hum %d%% %s (H:%.1f L:%.1f) day=%s sun=%s rain=%s next=%s%s end=%s metar=%s\n",
-                curTemp, curFeels, curHum, wx.description.c_str(), dMax, dMin,
+  // ---- Phase 5: NWS preferred/backup station as the temperature source ----
+  // Tries [preferred, backup1..3] in that order; the first station whose
+  // latest observation is usable (nwsObsUsable: fresh, NTP-synced age) and
+  // carries a valid temperature supplies the dashboard temperature and the
+  // NWS feels-like (wind chill / heat index computed from that same
+  // observation's wind + humidity). When none qualifies, the Open-Meteo
+  // values above stand (outside NWS coverage, NWS outage, all stations
+  // stale, or no station configured). The dog outfit is selected from
+  // wx.feelsLike, so it always follows whichever source won here.
+  static NwsStation cand[1 + NWS_BACKUP_MAX];
+  wx.nwsSourceId[0] = '\0';
+  if (userSettings.nwsStationId[0] != '\0') {
+    memset(cand, 0, sizeof(cand));
+    snprintf(cand[0].id, sizeof(cand[0].id), "%s", userSettings.nwsStationId);
+    int n = 1;
+    for (int k = 0; k < NWS_BACKUP_MAX &&
+                  n < (int)(sizeof(cand) / sizeof(cand[0])); k++) {
+      if (!userSettings.nwsStationBackup[k][0]) break;   // "" = empty slot
+      snprintf(cand[n].id, sizeof(cand[n].id), "%s", userSettings.nwsStationBackup[k]);
+      n++;
+    }
+    int used = -1;
+    for (int i = 0; i < n; i++) {
+      if (nwsFetchLatestObs(&cand[i]) == 0 &&
+          nwsObsUsable(&cand[i]) && nwsObsHasValidTemp(&cand[i])) {
+        used = i;
+        break;
+      }
+    }
+    if (used >= 0) {
+      const float tempF = cand[used].obsTempC * 9.0f / 5.0f + 32.0f;   // C->F, the existing convention
+      wx.temp       = tempF;
+      wx.feelsLike  = nwsFeelsLikeF(tempF, cand[used].obsWindMph, cand[used].obsRelHum);
+      wx.lastUpdateEpoch = (time_t)cand[used].obsEpochSec;   // observation time, not fetch time
+      snprintf(wx.nwsSourceId, sizeof(wx.nwsSourceId), "%s", cand[used].id);
+      Serial.printf("[NWS] dashboard temp from %s (%s)\n", cand[used].id,
+                    strcmp(cand[used].id, userSettings.nwsStationId) == 0 ? "preferred" : "backup");
+    } else {
+      Serial.println("[NWS] no usable station observation; keeping Open-Meteo temp");
+    }
+  }
+
+  Serial.printf("[WX] %.1f F feels %.1f F hum %d%% %s (H:%.1f L:%.1f) day=%s sun=%s rain=%s next=%s%s end=%s metar=%s src=%s\n",
+                wx.temp, wx.feelsLike, wx.humidity, wx.description.c_str(), wx.tMax, wx.tMin,
                 isDayOk ? (wx.isDay ? "1" : "0") : "?", wx.sunny ? "1" : "0",
                 rainingNow ? "NOW" : "-",
                 wx.nextRain[0] ? wx.nextRain : "-", nextFrom15min ? "(15m)" : "",
-                rainEnd[0] ? rainEnd : "-", metarOk ? "ok" : "fallback");
+                rainEnd[0] ? rainEnd : "-", metarOk ? "ok" : "fallback",
+                wx.nwsSourceId[0] ? wx.nwsSourceId : "open-meteo");
   return true;
 }
 

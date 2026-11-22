@@ -120,6 +120,24 @@ static void drawClockAndDate(const T& t) {
   gT->drawString(dateBuf, t.X((320 - dw) / 2), t.Y(gLayout.dateY));
 }
 
+// Data-age line for the BASIC theme's weather panel (replaces the old
+// "Updated H:MM:SS AM/PM" stamp): "NWS KLGA 24m - OM 15m" / "OM 15m".
+// Bitmap font only - this theme never uses the Nunito BFF front.
+static char lastBasicAge[48] = {0};
+static void drawBasicAgeLine(const T& t) {
+  char line[48];
+  buildDataAgeLine(line, sizeof(line), " - ");
+  if (line[0]) {
+    gT->setTextSize(1);
+    int lw = gT->textWidth(line);
+    gT->setTextSize(t.sx);
+    gT->setTextColor(TFT_DARKGRAY);
+    gT->drawString(line, t.X((textZoneRight() - lw) / 2), t.Y(gLayout.tempY + gLayout.updatedOffset));
+  }
+  strncpy(lastBasicAge, line, sizeof(lastBasicAge) - 1);
+  lastBasicAge[sizeof(lastBasicAge) - 1] = '\0';
+}
+
 static void drawWeatherPanel(const T& t) {
   int y = gLayout.tempY;   // top of the weather block (layout)
 
@@ -193,20 +211,8 @@ static void drawWeatherPanel(const T& t) {
   gT->setTextColor(TFT_GREENYELLOW);   // displays dark blue on this panel
   gT->drawString(rbuf, t.X((zoneRight - lw) / 2), t.Y(y + gLayout.rainOffset));
 
-  // Last update time ("Updated H:MM:SS AM/PM", local time)
-  if (wx.lastUpdateEpoch > 1700000000UL) {
-    char tbuf[16];
-    struct tm lt;
-    time_t local = wx.lastUpdateEpoch + localOffsetSec(wx.lastUpdateEpoch);
-    localtime_r(&local, &lt);
-    formatUpdTime(tbuf, sizeof(tbuf), &lt, true);
-    snprintf(line, sizeof(line), "Updated %s", tbuf);
-    gT->setTextSize(1);
-    lw = gT->textWidth(line);
-    gT->setTextSize(t.sx);
-    gT->setTextColor(TFT_DARKGRAY);
-    gT->drawString(line, t.X((zoneRight - lw) / 2), t.Y(y + gLayout.updatedOffset));
-  }
+  // Data-age line (replaces the old "Updated H:MM:SS AM/PM" stamp)
+  drawBasicAgeLine(t);
 }
 
 static void drawTouchHint(const T& t) {
@@ -372,6 +378,131 @@ static void drawSkyDynamicBand(const T& t) {
   bffCenter(t, nunitoF13, dateBuf, 160, 62, p.date, bffFit(nunitoF13, dateBuf, 300), bgCode(1, 0, 62));
 }
 
+// ---------------------------------------------------------------------------
+//  Data-age bottom lines (replace the old "UPD h:mm" stamps).
+//
+//  buildDataAgeLine() (display.cpp) turns the source epochs into ages, e.g.
+//  "NWS KLGA 24m \xB7 OM 15m" while an NWS station supplies the temperature,
+//  "OM 15m" when Open-Meteo does, "--" for unknown epochs. The age grows with
+//  wall-clock time, so updateDynamicTexts() repaints just the affected line
+//  once a minute instead of the whole screen. The `last*` caches let the
+//  per-second tick skip the repaint entirely when the text is unchanged.
+// ---------------------------------------------------------------------------
+
+// SKY tiny line: HUM/H/L + data age (or "NO WEATHER DATA"). Nunito uses the
+// two-source form, dropping em10 -> em9 when it misses the 204px zone; the
+// bitmap fallback keeps the one-source form so the line stays ~7px tall.
+static char lastSkyTiny[64] = {0};
+static void buildSkyTinyLine(char* buf, size_t n) {
+  char age[40];
+  buildDataAgeLine(age, sizeof(age), nunitoOK ? " \xB7 " : " - ", nunitoOK);
+  if (wx.valid)
+    // Single spaces: with triple spaces the Fahrenheit string (two-digit temps)
+    // overflowed the 204px zone and fitSize shrank it to an unreadable size.
+    snprintf(buf, n, "HUM %d%% H %.0f L %.0f%s%s",
+             wx.humidity, tempForDisplay(wx.tMax), tempForDisplay(wx.tMin),
+             age[0] ? " " : "", age);
+  else
+    snprintf(buf, n, "NO WEATHER DATA");
+}
+static void drawSkyTinyLine(const T& t) {
+  const SkyPal& p = SKY();
+  char tiny[64];
+  buildSkyTinyLine(tiny, sizeof(tiny));
+  if (nunitoOK) {
+    lgfx::BFFfont& f = (bffWidth(nunitoF10, tiny) <= 204) ? nunitoF10 : nunitoF9;
+    bffCenter(t, f, tiny, 116, 148, p.tiny, bffFit(f, tiny, 204), bgCode(1, 0, 148));
+  } else {
+    drawCenter(t, 116, 148, tiny, 1.0f, p.tiny, 204);
+  }
+  strncpy(lastSkyTiny, tiny, sizeof(lastSkyTiny) - 1);
+  lastSkyTiny[sizeof(lastSkyTiny) - 1] = '\0';
+}
+
+// SPLIT row 1: HUM/H/L left, data age right-aligned at x=213 (the FEELS-chip
+// value's right edge - chips span 12..225 with a ~12px inner inset, and 213
+// stays inside the solid left zone so the per-minute clear band covers the
+// whole line; the dog box starts at x=221). Both ages are shown in the
+// compact two-source form "KLGA 24m \xB7 OM 15m" (shortNws drops the "NWS "
+// prefix): measured em9 widths give 107 (typical HUM text) + 86 (typical age)
+// = 193 px, exactly the 213-12-8 budget; rarer wider combos shrink the left
+// text via bffFit instead of dropping a source.
+static char lastSplitRight[28] = {0};
+static void drawSplitRow1(const T& t) {
+  const SplitPal& p = SPLIT();
+  char left[48], right[28];
+  if (wx.valid)
+    snprintf(left, sizeof(left), nunitoOK ? "HUM %d%% \xB7 H %.1f\xB0 L %.1f\xB0"
+                                          : "HUM %d%%  H %.1f L %.1f",   // GLCD font: no \xB7
+             wx.humidity, tempForDisplay(wx.tMax), tempForDisplay(wx.tMin));
+  else
+    snprintf(left, sizeof(left), "NO WEATHER DATA");
+  buildDataAgeLine(right, sizeof(right), " - ", true, true);
+  if (nunitoOK) {
+    int rwid = (int)(bffWidth(nunitoF9, right) + 0.5f);
+    // Fit the left text against the actual right-slot width (minus an 8px gap)
+    // so a three-digit HUM/H/L string can never collide with the age text.
+    float lsc = bffFit(nunitoF9, left, (213 - rwid - 8) - 12);
+    bffText(t, nunitoF9, left, 12, 217, p.row1C, lsc, p.left);
+    bffText(t, nunitoF9, right, 213 - rwid, 217, p.row1C, 1.0f, p.left);
+  } else {
+    drawSplitRow(t, 12, 217, 213, left, right, 1.0f, p.row1C);
+  }
+  strncpy(lastSplitRight, right, sizeof(lastSplitRight) - 1);
+  lastSplitRight[sizeof(lastSplitRight) - 1] = '\0';
+}
+
+// SPLIT rain chip [12,184] 213 wide (Nunito front): shared by the full render
+// and the per-second age repaint (row 1 sits on the chip's bottom border).
+static void drawSplitRainChip(const T& t) {
+  const SplitPal& p = SPLIT();
+  char rain[48];
+  buildRainLine(rain, sizeof(rain));
+  gT->fillRoundRect(t.X(12), t.Y(184), max(2, t.W(213)), max(2, t.H(27)), (int)(8 * t.sx + 0.5f), p.rBg);
+  gT->drawRoundRect(t.X(12), t.Y(184), max(1, t.W(213) - 1), max(1, t.H(27) - 1), (int)(7 * t.sx + 0.5f), p.rBd);
+  // em12 @1.0 (design 11.5px); drop to em10 when the line overflows - sub-1.0
+  // BFF scaling decimates 1px strokes (see bffRainFont).
+  float rsc;
+  lgfx::BFFfont* rf = bffRainFont(rain, 213 - 40, &rsc);
+  int rw = (int)(bffWidth(*rf, rain) * rsc + 0.5f);
+  int gx = 12 + (213 - (13 + 6 + rw)) / 2;     // group: umbrella(13px) + gap(6px) + text
+  drawUmbrella(t, gx + 6, 184 + 13, 1.0f, p.rDot, p.rBg);
+  bffText(t, *rf, rain, gx + 19, 184 + (27 - (int)(rf->ascent - rf->descent)) / 2, p.rTxt, rsc, p.rBg);
+}
+
+// BENTO detail-card bottom line: data age + refresh hint. Nunito: "... \xB7
+// TOUCH TO REFRESH" at em9, dropping to "... \xB7 REFRESH" when the full form
+// misses the 174px card; bitmap: "... - REFRESH" at fitSize scale.
+static char lastBentoInfo[72] = {0};
+static void buildBentoInfoRef(char* buf, size_t n) {
+  char age[40];
+  buildDataAgeLine(age, sizeof(age), nunitoOK ? " \xB7 " : " - ");
+  if (age[0]) {
+    if (nunitoOK) {
+      snprintf(buf, n, "%s \xB7 TOUCH TO REFRESH", age);
+      if (bffWidth(nunitoF9, buf) > 174) snprintf(buf, n, "%s \xB7 REFRESH", age);
+    } else {
+      snprintf(buf, n, "%s - REFRESH", age);
+    }
+  } else {
+    snprintf(buf, n, nunitoOK ? "TOUCH TO REFRESH" : "REFRESH");
+  }
+}
+static void drawBentoInfoLine(const T& t) {
+  const BentoPal& p = BENTO();
+  char ref[72];
+  buildBentoInfoRef(ref, sizeof(ref));
+  if (nunitoOK) {
+    bffText(t, nunitoF9, ref, 22, 221, p.updC, 1.0f, p.cardBg);
+  } else {
+    float us = fitSize(ref, 0.85f, 174);
+    gT->setTextSize(us * t.sx); gT->setTextColor(p.updC);
+    gT->drawString(ref, t.X(22), t.Y(221));
+  }
+  strncpy(lastBentoInfo, ref, sizeof(lastBentoInfo) - 1);
+  lastBentoInfo[sizeof(lastBentoInfo) - 1] = '\0';
+}
+
 static void renderTheme1Legacy(const T& t) {   // SKY - original bitmap-font layout
   const SkyPal& p = SKY();
   drawThemeBg(1, t);
@@ -402,16 +533,7 @@ static void renderTheme1Legacy(const T& t) {   // SKY - original bitmap-font lay
   gT->setTextSize(dsc * t.sx); gT->setTextColor(p.desc);
   gT->drawString(desc, t.X(40), t.Y(129));
 
-  char tiny[64], upd[24];
-  buildUpdShort(upd, sizeof(upd));
-  if (wx.valid)
-    // Single spaces: with triple spaces the Fahrenheit string (two-digit temps)
-    // overflowed the 204px zone and fitSize shrank it to an unreadable size.
-    snprintf(tiny, sizeof(tiny), "HUM %d%% H %.0f L %.0f%s%s",
-             wx.humidity, tempForDisplay(wx.tMax), tempForDisplay(wx.tMin), upd[0] ? " " : "", upd);
-  else
-    snprintf(tiny, sizeof(tiny), "NO WEATHER DATA");
-  drawCenter(t, 116, 148, tiny, 1.0f, p.tiny, 204);
+  drawSkyTinyLine(t);   // HUM/H/L + data age
 
   char feels[16]; tempOrDash(feels, sizeof(feels), wx.valid, wx.feelsLike);
   drawFeelsChip(t, 14, 162, 204, 30, p.fBg, p.fBd, 1.25f, p.fLbl, feels, 2.25f, p.fVal);
@@ -447,17 +569,8 @@ static void renderTheme1(const T& t) {   // SKY - Nunito BFF fonts
   drawCloud(t, 16, 132, 0.38f, p.desc);
   bffText(t, nunitoF20, desc, 40, 129, p.desc, bffFit(nunitoF20, desc, 218 - 40), bgCode(1, 0, 129));
 
-  // Tiny row: centered x=116 (em10).
-  char tiny[64], upd[24];
-  buildUpdShort(upd, sizeof(upd));
-  if (wx.valid)
-    // Single spaces: with triple spaces the Fahrenheit string (two-digit temps)
-    // overflowed the 204px zone and fitSize shrank it to an unreadable size.
-    snprintf(tiny, sizeof(tiny), "HUM %d%% H %.0f L %.0f%s%s",
-             wx.humidity, tempForDisplay(wx.tMax), tempForDisplay(wx.tMin), upd[0] ? " " : "", upd);
-  else
-    snprintf(tiny, sizeof(tiny), "NO WEATHER DATA");
-  bffCenter(t, nunitoF10, tiny, 116, 148, p.tiny, bffFit(nunitoF10, tiny, 204), bgCode(1, 0, 148));
+  // Tiny row: centered x=116 (em10, dropping to em9 for the NWS two-source form)
+  drawSkyTinyLine(t);
 
   // Feels-like chip (em10 label / em20 value).
   char feels[16]; tempOrDash(feels, sizeof(feels), wx.valid, wx.feelsLike);
@@ -561,12 +674,7 @@ static void renderTheme2(const T& t) {   // SPLIT
     char rain[48]; buildRainLine(rain, sizeof(rain));
     drawRainChip(t, 12, 184, 213, 27, p.rBg, p.rBd, rain, 1.4f, p.rTxt, p.rDot);
 
-    char left[48], right[24];   // GLCD font has no \xB7 glyph: use spaces
-    if (wx.valid) snprintf(left, sizeof(left), "HUM %d%%  H %.1f L %.1f",
-                           wx.humidity, tempForDisplay(wx.tMax), tempForDisplay(wx.tMin));
-    else          snprintf(left, sizeof(left), "NO WEATHER DATA");
-    buildUpdShort(right, sizeof(right));
-    drawSplitRow(t, 12, 217, 202, left, right, 1.0f, p.row1C);
+    drawSplitRow1(t);   // row 1: HUM/H/L left, data age right
 
     drawCenter(t, 107, 229, "TOUCH TO REFRESH", 1.0f, p.hint, 196);
     drawDogImage(t, THEME_SPLIT);
@@ -615,32 +723,12 @@ static void renderTheme2(const T& t) {   // SPLIT
   int vw = (int)(bffWidth(nunitoF20, feels) * fvs + 0.5f);
   bffText(t, nunitoF20, feels, 213 - vw, 146 + (32 - (int)(20 * fvs)) / 2, p.fVal, fvs, p.fBg);
 
-  // RAIN chip [12,184] 213 wide: same outer box as the feels chip (content-box).
-  // Umbrella icon + text (em12 @1.0, em10 when the line overflows) centred
-  // as a group.
-  char rain[48]; buildRainLine(rain, sizeof(rain));
-  gT->fillRoundRect(t.X(12), t.Y(184), max(2, t.W(213)), max(2, t.H(27)), (int)(8 * t.sx + 0.5f), p.rBg);
-  gT->drawRoundRect(t.X(12), t.Y(184), max(1, t.W(213) - 1), max(1, t.H(27) - 1), (int)(7 * t.sx + 0.5f), p.rBd);
-  // em12 @1.0 (design 11.5px); drop to em10 when the line overflows - sub-1.0
-  // BFF scaling decimates 1px strokes (see bffRainFont).
-  float rsc;
-  lgfx::BFFfont* rf = bffRainFont(rain, 213 - 40, &rsc);
-  int rw = (int)(bffWidth(*rf, rain) * rsc + 0.5f);
-  int gx = 12 + (213 - (13 + 6 + rw)) / 2;     // group: umbrella(13px) + gap(6px) + text
-  drawUmbrella(t, gx + 6, 184 + 13, 1.0f, p.rDot, p.rBg);
-  bffText(t, *rf, rain, gx + 19, 184 + (27 - (int)(rf->ascent - rf->descent)) / 2, p.rTxt, rsc, p.rBg);
+  drawSplitRainChip(t);   // RAIN chip [12,184] 213 wide (same outer box as the feels chip)
 
-  // row1 (design top:217 width:190): left text @x=12; UPD right-aligned at x=202.
+  // row1 (design top:217): HUM/H/L left @x=12; data age right-aligned at x=213
+  // (chip value anchor - see drawSplitRow1).
   // em9 @1.0 = design's 9px (em10@0.85 decimated and garbled thin strokes).
-  char left[48], right[24];
-  if (wx.valid) snprintf(left, sizeof(left), "HUM %d%% \xB7 H %.1f\xB0 L %.1f\xB0",
-                         wx.humidity, tempForDisplay(wx.tMax), tempForDisplay(wx.tMin));
-  else          snprintf(left, sizeof(left), "NO WEATHER DATA");
-  buildUpdShort(right, sizeof(right));
-  float lsc = bffFit(nunitoF9, left, 202 - 12);
-  bffText(t, nunitoF9, left, 12, 217, p.row1C, lsc, p.left);
-  int rwid = (int)(bffWidth(nunitoF9, right) + 0.5f);
-  bffText(t, nunitoF9, right, 202 - rwid, 217, p.row1C, 1.0f, p.left);
+  drawSplitRow1(t);
 
   bffCenter(t, nunitoF9, "TOUCH TO REFRESH", 107, 229, p.hint, 1.0f, p.left);
   drawDogImage(t, THEME_SPLIT);
@@ -775,11 +863,7 @@ static void renderTheme3Legacy(const T& t) {
   gT->setTextSize(1 * t.sx); gT->setTextColor(p.detC);
   gT->drawString(d1, t.X(22), t.Y(194));
   gT->drawString(d2, t.X(22), t.Y(207));
-  char upd[32]; buildUpdShort(upd, sizeof(upd));
-  String updl = String(upd); if (updl.length()) updl += " - REFRESH";
-  float us = fitSize(updl.c_str(), 0.85f, 174);
-  gT->setTextSize(us * t.sx); gT->setTextColor(p.updC);
-  gT->drawString(updl.c_str(), t.X(22), t.Y(221));
+  drawBentoInfoLine(t);   // data age + refresh hint
 }
 
 // BENTO with the Nunito BFF front (the SKY theme's font): design typography -
@@ -854,11 +938,7 @@ static void renderTheme3Nunito(const T& t) {
   else
     snprintf(d2, sizeof(d2), "NO WEATHER DATA");
   bffText(t, nunitoF10, d2, 22, 207, p.detC, 1.0f, p.cardBg);
-  char upd[32], ref[64];
-  buildUpdShort(upd, sizeof(upd));
-  if (upd[0]) snprintf(ref, sizeof(ref), "%s \xB7 TOUCH TO REFRESH", upd);
-  else        snprintf(ref, sizeof(ref), "TOUCH TO REFRESH");
-  bffText(t, nunitoF9, ref, 22, 221, p.updC, 1.0f, p.cardBg);
+  drawBentoInfoLine(t);   // data age + refresh hint
 
   drawBentoDogCard(t);
 }
@@ -889,14 +969,18 @@ void renderScreen() {
 //  The panel has no framebuffer – every pixel write goes straight over SPI,
 //  so redrawing the whole screen once per second is visible as flicker.
 //  Instead, only what actually changed is repainted:
-//    theme 0 (BASIC): band-clear + redraw of clock/date lines (original approach)
+//    theme 0 (BASIC): band-clear + redraw of clock/date lines (original approach),
+//                     plus the data-age line when its minute-granular age ticks
 //    theme 1 (SKY):   clearThemed() over the status/clock/date bands + redraw
 //                     those elements (sky decorations included – they sit in
-//                     the cleared band and are cheap to repaint)
-//    theme 2 (SPLIT): clearThemed() over the clock/date band + redraw it
-//    theme 3 (BENTO): clearThemed() over the clock card + redraw it. Its text
-//                     is minute-granular, so the per-second tick is a no-op
-//                     (no SPI traffic at all -> no flash)
+//                     the cleared band and are cheap to repaint); the tiny
+//                     HUM line is repainted separately when the data age ticks
+//    theme 2 (SPLIT): clearThemed() over the clock/date band + redraw it; the
+//                     rain-chip/row-1 area is repainted when the data age ticks
+//    theme 3 (BENTO): clearThemed() over the clock card + redraw it (its text
+//                     is minute-granular, so a pure clock/date tick is a no-op
+//                     -> no SPI traffic, no flash); the detail card's data-age
+//                     line is repainted separately when the age ticks
 // ---------------------------------------------------------------------------
 void updateDynamicTexts() {
   if (!ntpSynced) return;
@@ -934,61 +1018,112 @@ void updateDynamicTexts() {
       tft.setTextColor(TFT_YELLOW);
       tft.drawString(dateBuf, (320 - dw) / 2, gLayout.dateY);
     }
+
+    // ---- Data-age line – repaint only when the age string changed (per minute) ----
+    char age[48];
+    buildDataAgeLine(age, sizeof(age), " - ");
+    if (strcmp(age, lastBasicAge) != 0) {
+      clearRegion(0, gLayout.tempY + gLayout.updatedOffset - 2, textZoneRight(), 12);
+      drawBasicAgeLine(T::ID);   // re-syncs lastBasicAge
+    }
     return;
   }
 
   if (userSettings.theme == THEME_SKY) {
     bool clockChanged = strcmp(clockBuf, lastClockBuf) != 0;
     bool dateChanged  = strcmp(dateBuf, lastDateBuf) != 0;
-    if (!clockChanged && !dateChanged) return;
+    char tiny[64];
+    buildSkyTinyLine(tiny, sizeof(tiny));
+    bool tinyChanged = strcmp(tiny, lastSkyTiny) != 0;   // data age ticks once a minute
+    if (!clockChanged && !dateChanged && !tinyChanged) return;
 
     T t = T::ID;
-    // Clear the dynamic band (status row y~7 + clock + date line ending ~y73),
-    // then redraw it. Sky decorations live inside this band and are repainted
-    // right after, so nothing is lost.
-    clearThemed(userSettings.theme, t, 4, 4, 312, 72);
-    if (clockChanged) {
-      strncpy(lastClockBuf, clockBuf, sizeof(lastClockBuf) - 1);
-      lastClockBuf[sizeof(lastClockBuf) - 1] = '\0';
-    }
-    if (dateChanged) {
-      strncpy(lastDateBuf, dateBuf, sizeof(lastDateBuf) - 1);
-      lastDateBuf[sizeof(lastDateBuf) - 1] = '\0';
-    }
+    if (clockChanged || dateChanged) {
+      // Clear the dynamic band (status row y~7 + clock + date line ending ~y73),
+      // then redraw it. Sky decorations live inside this band and are repainted
+      // right after, so nothing is lost.
+      clearThemed(userSettings.theme, t, 4, 4, 312, 72);
+      if (clockChanged) {
+        strncpy(lastClockBuf, clockBuf, sizeof(lastClockBuf) - 1);
+        lastClockBuf[sizeof(lastClockBuf) - 1] = '\0';
+      }
+      if (dateChanged) {
+        strncpy(lastDateBuf, dateBuf, sizeof(lastDateBuf) - 1);
+        lastDateBuf[sizeof(lastDateBuf) - 1] = '\0';
+      }
 
-    drawSkyDecor(userSettings.theme, t);   // sun/moon/clouds/stars live in this band
-    drawSkyDynamicBand(t);   // Nunito band (bitmap fallback inside)
+      drawSkyDecor(userSettings.theme, t);   // sun/moon/clouds/stars live in this band
+      drawSkyDynamicBand(t);   // Nunito band (bitmap fallback inside)
+    }
+    if (tinyChanged) {
+      // Tiny line band [138..157): the 0.38-scale description cloud ends at
+      // y=137, so starting at 138 cannot clip it.
+      clearThemed(userSettings.theme, t, 14, 138, 204, 19);
+      drawSkyTinyLine(t);   // re-syncs lastSkyTiny
+    }
     return;
   }
 
-  if (userSettings.theme == THEME_SPLIT) {   // SPLIT: repaint only the clock/date band.
+  if (userSettings.theme == THEME_SPLIT) {   // SPLIT: clock/date band, and the
+        // rain-chip/row-1 area when the data age ticks.
     bool clockChanged = strcmp(clockBuf, lastClockBuf) != 0;
     bool dateChanged  = strcmp(dateBuf, lastDateBuf) != 0;
-    if (!clockChanged && !dateChanged) return;   // no blinking colon: nothing moves per second
+    char right[28];
+    buildDataAgeLine(right, sizeof(right), " - ", true, true);   // must match drawSplitRow1
+    bool ageChanged = strcmp(right, lastSplitRight) != 0;
+    if (!clockChanged && !dateChanged && !ageChanged) return;   // nothing moves per second
     const T& t = T::ID;     // screen is exactly 320x240 -> identity transform
-    clearThemed(THEME_SPLIT, t, 10, 22, 204, 56);   // left-zone rows [22..78): solid bg
-    drawSplitClockDate(t);
-    if (clockChanged) {
-      strncpy(lastClockBuf, clockBuf, sizeof(lastClockBuf) - 1);
-      lastClockBuf[sizeof(lastClockBuf) - 1] = '\0';
+    if (clockChanged || dateChanged) {
+      clearThemed(THEME_SPLIT, t, 10, 22, 204, 56);   // left-zone rows [22..78): solid bg
+      drawSplitClockDate(t);
+      if (clockChanged) {
+        strncpy(lastClockBuf, clockBuf, sizeof(lastClockBuf) - 1);
+        lastClockBuf[sizeof(lastClockBuf) - 1] = '\0';
+      }
+      if (dateChanged) {
+        strncpy(lastDateBuf, dateBuf, sizeof(lastDateBuf) - 1);
+        lastDateBuf[sizeof(lastDateBuf) - 1] = '\0';
+      }
     }
-    if (dateChanged) {
-      strncpy(lastDateBuf, dateBuf, sizeof(lastDateBuf) - 1);
-      lastDateBuf[sizeof(lastDateBuf) - 1] = '\0';
+    if (ageChanged) {
+      // Rain-chip/row-1 area: x 12..214 solid, x 214..218 per-row gradient
+      // (bgCode of the right panel); the chip redraw repaints to x=225.
+      clearThemed(THEME_SPLIT, t, 12, 184, 202, 39);   // rows [184..223)
+      for (int i = 0; i < 39; i++)
+        gT->fillRect(t.X(214), t.Y(184 + i), max(1, t.W(4)), 1, bgCode(THEME_SPLIT, 267, 184 + i));
+      if (nunitoOK)
+        drawSplitRainChip(t);
+      else {
+        const SplitPal& p = SPLIT();
+        char rain[48];
+        buildRainLine(rain, sizeof(rain));
+        drawRainChip(t, 12, 184, 213, 27, p.rBg, p.rBd, rain, 1.4f, p.rTxt, p.rDot);
+      }
+      drawSplitRow1(t);   // re-syncs lastSplitRight
     }
     return;
   }
 
-  if (userSettings.theme == THEME_BENTO) {   // BENTO: repaint only the clock card. Its text is
-                            // minute-granular, so a per-second tick is a no-op
-                            // (zero SPI traffic -> no flash); once a minute
-                            // only the 304x52 card band is cleared + redrawn.
+  if (userSettings.theme == THEME_BENTO) {   // BENTO: clock card, and the detail
+        // card's data-age line when its minute-granular age ticks.
     bool clockChanged = strcmp(clockBuf, lastClockBuf) != 0;
     bool dateChanged  = strcmp(dateBuf, lastDateBuf) != 0;
-    if (!clockChanged && !dateChanged) return;
+    char ref[72];
+    buildBentoInfoRef(ref, sizeof(ref));
+    bool ageChanged = strcmp(ref, lastBentoInfo) != 0;
+    if (!clockChanged && !dateChanged && !ageChanged) return;
     T t = T::ID;
-    clearThemed(THEME_BENTO, t, 8, 8, 304, 52);   // clock card rows [8..60)
-    drawBentoClockCard(t);               // redraws the card + re-syncs the cache
+    if (clockChanged || dateChanged) {
+      clearThemed(THEME_BENTO, t, 8, 8, 304, 52);   // clock card rows [8..60)
+      drawBentoClockCard(t);               // redraws the card + re-syncs the cache
+    }
+    if (ageChanged) {
+      // Detail-card line band: interior rows [213..229) of the flat card fill
+      // (card box [8,184] 192x48; the d2 row above ends at y~210).
+      const BentoPal& p = BENTO();
+      gT->fillRect(t.X(22), t.Y(213), max(1, t.W(166)), 16, p.cardBg);
+      drawBentoInfoLine(t);   // re-syncs lastBentoInfo
+    }
     return;
   }
 

@@ -27,7 +27,16 @@ struct WeatherData {
   bool     nextRainTomorrow = false;
   bool     nextRainFrom15min = false;   // nextRain came from RRFS 15-min data (vs hourly model)
   uint32_t lastUpdateMs = 0;     // millis() of last successful fetch (refresh cadence)
-  time_t   lastUpdateEpoch = 0;  // UTC epoch of last successful fetch (displayed)
+  time_t   lastUpdateEpoch = 0;  // UTC epoch of the data shown: the NWS observation
+                                 // time when an NWS station supplies temp/feels, else
+                                 // the Open-Meteo model data time (fetch time if the
+                                 // model time is unparseable)
+  time_t   omModelEpoch = 0;     // UTC epoch of the Open-Meteo current.time model
+                                 // step (0 when unparseable -> data-age shows "--");
+                                 // kept separately so the bottom line can show both
+                                 // ages even while NWS supplies the temperature
+  char     nwsSourceId[8] = "";  // "" = Open-Meteo supplied temp/feels, else the ICAO
+                                 // id of the NWS station that did
 };
 
 // (Timing constants WEATHER_REFRESH_MS / WIFI_RETRY_MS / WX_MIN_RETRY_MS /

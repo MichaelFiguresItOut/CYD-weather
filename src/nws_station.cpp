@@ -345,11 +345,51 @@ int nwsFetchStations(const char* stationsUrl, NwsStation* out, int maxStations) 
     s->obsFail = false;
     s->obsAgeSec = -1;
     s->obsTempC = NAN;
+    s->obsWindMph = NAN;
+    s->obsRelHum = NAN;
+    s->obsEpochSec = 0;
     s->obsText[0] = 0;
     n++;
   }
   Serial.printf("[NWS] station list: %d stored (features kept %d)\n", n, kept);
   return n;
+}
+
+// ---------------------------------------------------------------------------
+//  Observation property parsing (unit-aware)
+//
+//  NWS reports observation values with a wmoUnit code and the unit is not
+//  guaranteed to be the "expected" one (the KNYC capture in test/nws/ is
+//  degC + km/h, many US stations report degF + mph), so every value is
+//  converted from its own unitCode rather than assumed.
+// ---------------------------------------------------------------------------
+
+// Generic numeric property (e.g. relativeHumidity, already in %): the
+// "value" member of a {unitCode, value} object, or NaN when absent/null.
+static float nwsObsNum(JsonVariant obj) {
+  JsonVariant v = obj["value"];
+  return v.isNull() ? NAN : v.as<float>();
+}
+
+// Temperature {unitCode, value} -> °C (degF converted; degC and anything
+// unrecognized passed through as °C - NWS only sends degC/degF).
+static float nwsObsValueF2C(JsonVariant obj) {
+  float v = nwsObsNum(obj);
+  if (isnan(v)) return v;
+  const char* u = obj["unitCode"].as<const char*>();
+  if (u && strstr(u, "degF")) v = (v - 32.0f) * 5.0f / 9.0f;
+  return v;
+}
+
+// Wind speed {unitCode, value} -> mph (km/h converted; mi_h passed
+// through; anything else -> NaN).
+static float nwsObsWindMph(JsonVariant obj) {
+  float v = nwsObsNum(obj);
+  if (isnan(v)) return v;
+  const char* u = obj["unitCode"].as<const char*>();
+  if (u && strstr(u, "km_h")) v /= 1.609344f;
+  else if (!u || !strstr(u, "mi_h")) return NAN;
+  return v;
 }
 
 // ---------------------------------------------------------------------------
@@ -387,8 +427,10 @@ int nwsFetchLatestObs(NwsStation* st) {
 
   st->hasObs = true;
   st->obsFail = false;
-  JsonVariant tv = props["temperature"]["value"];
-  st->obsTempC = tv.isNull() ? NAN : tv.as<float>();
+  st->obsEpochSec = (long)epoch;
+  st->obsTempC = nwsObsValueF2C(props["temperature"]);   // unitCode-aware
+  st->obsWindMph = nwsObsWindMph(props["windSpeed"]);    // unitCode-aware
+  st->obsRelHum = nwsObsNum(props["relativeHumidity"]);  // already %
   snprintf(st->obsText, sizeof(st->obsText), "%.23s",
            props["textDescription"].as<const char*>() ? props["textDescription"].as<const char*>() : "");
   if (ntpIsSynced()) {
@@ -398,8 +440,9 @@ int nwsFetchLatestObs(NwsStation* st) {
   } else {
     st->obsAgeSec = -1;                    // no NTP: age unknown
   }
-  Serial.printf("[NWS] %s obs: age %lds, %.1fC, %s\n",
-                st->id, st->obsAgeSec, st->obsTempC, st->obsText);
+  Serial.printf("[NWS] %s obs: age %lds, %.1fC, wind %.1f mph, RH %.0f%%, %s\n",
+                st->id, st->obsAgeSec, st->obsTempC, st->obsWindMph,
+                st->obsRelHum, st->obsText);
   return 0;
 }
 
@@ -469,4 +512,53 @@ int nwsFindUsable(const NwsStation* list, int n) {
   for (int i = 0; i < n; i++)
     if (nwsObsUsable(&list[i])) return i;
   return -1;   // no usable NWS station -> Open-Meteo is the source
+}
+
+// ---------------------------------------------------------------------------
+//  Phase 5: dashboard reading from NWS - acceptance + feels-like.
+//  Pure logic, host-testable (test/nws/test_feels.py mirrors 1:1).
+// ---------------------------------------------------------------------------
+
+bool nwsObsHasValidTemp(const NwsStation* st) {
+  return st && st->hasObs && !isnan(st->obsTempC);
+}
+
+float nwsWindChillF(float tempF, float windMph) {
+  // NWS/Environment Canada wind-chill formula (F, mph; valid wind >= 3 mph).
+  const float v = powf(windMph, 0.16f);
+  return 35.74f + 0.6215f * tempF - 35.75f * v + 0.4275f * tempF * v;
+}
+
+float nwsHeatIndexF(float tempF, float relHumPct) {
+  // NWS heat index: Rothfusz (2005) regression (F, RH %).
+  float hi = -42.379f
+           + 2.04901523f  * tempF
+           + 10.14333127f * relHumPct
+           - 0.22475541f  * tempF * relHumPct
+           - 6.83783e-3f  * tempF * tempF
+           - 5.481717e-2f * relHumPct * relHumPct
+           + 1.22874e-3f  * tempF * tempF * relHumPct
+           + 8.5282e-4f   * tempF * relHumPct * relHumPct
+           - 1.99e-6f     * tempF * tempF * relHumPct * relHumPct;
+  // Published low-humidity adjustment: RH < 13% and 80F <= T <= 112F
+  // (the 14 below is part of the adjustment formula, not the threshold).
+  if (relHumPct < 13.0f && tempF >= 80.0f && tempF <= 112.0f) {
+    hi += sqrtf((14.0f - relHumPct) / 4.0f) * sqrtf((170.0f - tempF) / 17.0f);
+  }
+  // Published high-humidity adjustment: RH > 85% and 80F <= T <= 87F.
+  if (relHumPct > 85.0f && tempF >= 80.0f && tempF <= 87.0f) {
+    hi += ((relHumPct - 85.0f) / 10.0f) * ((87.0f - tempF) / 5.0f);
+  }
+  return hi;
+}
+
+float nwsFeelsLikeF(float tempF, float windMph, float relHumPct) {
+  if (isnan(tempF)) return tempF;
+  // Cold, windy -> wind chill (the published applicability limits).
+  if (!isnan(windMph) && tempF <= 50.0f && windMph >= 3.0f)
+    return nwsWindChillF(tempF, windMph);
+  // Hot and humid enough -> heat index.
+  if (!isnan(relHumPct) && tempF >= 80.0f && relHumPct >= 40.0f)
+    return nwsHeatIndexF(tempF, relHumPct);
+  return tempF;   // in between, or missing inputs: air temperature
 }

@@ -101,14 +101,6 @@ void formatClock(char* out, size_t n, const struct tm* lt) {
 // Widest possible clock string in the current mode (partial-update box size).
 const char* clockMaxString() { return userSettings.use24Hour ? "23:59" : "12:59 PM"; }
 
-// Last-update time in the currently selected clock mode (US 12h or 24h), so the
-// "Updated ..." / "UPD ..." lines follow the same tap toggle as the main clock.
-void formatUpdTime(char* out, size_t n, const struct tm* lt, bool withSeconds) {
-  if (userSettings.use24Hour) snprintf(out, n, withSeconds ? "%02d:%02d:%02d" : "%02d:%02d",
-                          lt->tm_hour, lt->tm_min, lt->tm_sec);
-  else           formatUS12(out, n, lt, withSeconds);
-}
-
 // Date line in the currently selected format. Format 0 keeps the original
 // "Thursday 12 November 2026"; format 1 is US-style with the weekday kept in
 // place, "Thursday November 12, 2026". Longest case ("Wednesday September 30,

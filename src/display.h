@@ -224,7 +224,8 @@ void drawFeelsChip(const T& t, int x, int yF, int w, int h, uint16_t bgC, uint16
 void drawRainChip(const T& t, int x, int yF, int w, int h, uint16_t bgC, uint16_t bdC, const char* txt, float s, uint16_t cTxt, uint16_t dotC, bool umbrella = false);
 void drawCard(const T& t, int x, int y, int w, int h, uint16_t bgC, uint16_t bdC);
 void buildRainLine(char* buf, size_t n);
-void buildUpdShort(char* buf, size_t n);
+void buildDataAgeLine(char* buf, size_t n, const char* sep, bool includeOm = true,
+                      bool shortNws = false);
 void buildTempStr(char* buf, size_t n, float v);
 const char* dogBandLabel();
 void dogBgDisplayed(int theme, int yFull, uint8_t& r, uint8_t& g, uint8_t& b);

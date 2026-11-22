@@ -15,7 +15,6 @@ long localOffsetSec(time_t utc);
 void formatUS12(char* out, size_t n, const struct tm* lt, bool withSeconds);
 void formatClock(char* out, size_t n, const struct tm* lt);
 const char* clockMaxString();
-void formatUpdTime(char* out, size_t n, const struct tm* lt, bool withSeconds);
 void formatDateLine(char* out, size_t n, const struct tm* lt);
 float tempForDisplay(float f);
 const char* tempUnitChar();

@@ -486,15 +486,44 @@ void buildRainLine(char* buf, size_t n) {
   }
 }
 
-// Short "UPD h:mm AM/PM" / "UPD HH:MM" in the current clock mode (empty if no update yet).
-void buildUpdShort(char* buf, size_t n) {
-  if (wx.lastUpdateEpoch <= 1700000000UL) { buf[0] = '\0'; return; }
-  char tbuf[16];
-  struct tm lt;
-  time_t local = wx.lastUpdateEpoch + localOffsetSec(wx.lastUpdateEpoch);
-  localtime_r(&local, &lt);
-  formatUpdTime(tbuf, sizeof(tbuf), &lt, false);
-  snprintf(buf, n, "UPD %s", tbuf);
+// Data-age label for one source: "NWS KLGA 24m" / "OM 1h 12m", "<label> --"
+// when the epoch is unknown (pre-NTP / unparseable model time).
+static void appendAgePart(char* pos, size_t remain, const char* label, time_t epoch) {
+  if (epoch <= 1700000000UL) { snprintf(pos, remain, "%s --", label); return; }
+  long age = (long)(time(nullptr) - epoch);
+  if (age < 0) age = 0;   // clock stepped backwards: show a fresh age, not negatives
+  long h = age / 3600, m = (age % 3600) / 60;
+  if (h == 0)         snprintf(pos, remain, "%s %ldm", label, m);
+  else if (m == 0)    snprintf(pos, remain, "%s %ldh", label, h);
+  else                snprintf(pos, remain, "%s %ldh %ldm", label, h, m);
+}
+
+// Data-age line for the bottom info row, e.g. "NWS KLGA 24m \xB7 OM 15m" while
+// an NWS station supplies the temperature, "OM 15m" when Open-Meteo supplies
+// it, "" with no weather data. `sep` joins the two ages (" \xB7 " for the
+// Nunito faces, " - " for the bitmap fallbacks: the GLCD font has no middle
+// dot). includeOm=false returns only the supplying source's age
+// ("NWS KLGA 24m" / "OM 15m") for narrow slots where the two-value form
+// does not fit. shortNws drops the "NWS " prefix so the station ID stands
+// alone ("KLGA 24m \xB7 OM 15m") - the SPLIT row 1 slot, where the full
+// form is too wide next to the HUM/H/L text.
+void buildDataAgeLine(char* buf, size_t n, const char* sep, bool includeOm, bool shortNws) {
+  buf[0] = '\0';
+  if (!wx.valid || n < 2) return;
+  if (wx.nwsSourceId[0] != '\0') {
+    char lbl[12];
+    snprintf(lbl, sizeof(lbl), shortNws ? "%s" : "NWS %s", wx.nwsSourceId);
+    char p1[24];
+    appendAgePart(p1, sizeof(p1), lbl, wx.lastUpdateEpoch);   // NWS observation epoch
+    if (!includeOm) { snprintf(buf, n, "%s", p1); return; }
+    char p2[16];
+    appendAgePart(p2, sizeof(p2), "OM", wx.omModelEpoch);
+    snprintf(buf, n, "%s%s%s", p1, sep, p2);
+  } else {
+    char p[16];
+    appendAgePart(p, sizeof(p), "OM", wx.omModelEpoch);
+    snprintf(buf, n, "%s", p);
+  }
 }
 
 // Temperature string with unit ("--.-" when unknown).

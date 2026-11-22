@@ -66,8 +66,9 @@ struct UserSettings {
   bool useCelsius;                // temperature display: false = Fahrenheit
   bool use24Hour;                 // clock: false = US 12-hour ("2:35 PM")
   int  dateFormat;                // 0: "Thursday 12 November 2026"  1: "Thursday November 12, 2026"
-  // Selected NWS observation station (chosen on the STATIONS settings page);
-  // Phase 5 reads nwsStationId for the main screen's NWS data block.
+  // Selected NWS observation station (chosen on the STATIONS settings page).
+  // Phase 5: fetchWeather() reads nwsStationId + nwsStationBackup[] as the
+  // dashboard temperature/feels-like source (preferred -> backups -> Open-Meteo).
   // "" = no station selected / none found near the location.
   char nwsStationId[8];           // ICAO identifier, e.g. "KNYC"
   char nwsStationName[40];        // NWS display name of the selected station

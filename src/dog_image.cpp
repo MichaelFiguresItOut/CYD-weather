@@ -173,9 +173,10 @@ bool loadDogImage(const char* path) {
   // ---------------------------------------------------------------------------
   //  Chunk walk: IHDR / PLTE / IDAT / IEND (everything else is skipped)
   // ---------------------------------------------------------------------------
+  const char* why = nullptr;   // reason for a failure that prints no message of its own
   for (;;) {
     uint8_t hdr[8];   // length (4 BE) + type (4 ASCII)
-    if (!readFull(f, hdr, 8)) break;
+    if (!readFull(f, hdr, 8)) { why = "read error walking chunks (truncated file or flaky SD read?)"; break; }
     uint32_t len = be32(&hdr[0]);
     // Chunk types are fixed 4-byte fields, NOT null-terminated strings:
     // compare exactly 4 bytes. (strcmp would read past the 8-byte header
@@ -216,14 +217,20 @@ bool loadDogImage(const char* path) {
 
     // Every chunk ends with a 4-byte CRC32 (not verified: pixel data is covered
     // by the Adler-32 check below and IHDR sanity checks).
-    if (!skip(f, 4)) ok = false;
+    if (!skip(f, 4) && !why) why = "read error in chunk CRC (flaky SD read?)";
 
     if (!ok || iend) break;
   }
 
   f.close();
 
-  if (!ok || !iend) { free(idat); return false; }
+  if (!ok || !iend) {
+    // The named error branches above already printed; only explain the silent
+    // ones. (EOF while walking chunks - truncated file, no IEND - surfaces as
+    // the chunk-walk read error above.)
+    if (why) Serial.printf("[DOG] /%s: %s\n", path, why);
+    free(idat); return false;
+  }
   if (info.colorType == 3 && !havePalette) { free(idat); Serial.println("[DOG] palette PNG without PLTE"); return false; }
 
   int bpp = (info.colorType == 2) ? 3 : (info.colorType == 6) ? 4 : 1;
@@ -251,6 +258,8 @@ bool loadDogImage(const char* path) {
   int rc = puff(raw, &destLen, defStart, &srcAvail);
 
   bool good = (rc == 0) && (destLen == rawSize);
+  if (!good && rc == 0 && !why)
+    why = "inflate size mismatch (corrupt IDAT?)";
   if (good && hasAdler) {
     size_t tail = (size_t)(idat + idatLen - defStart - srcAvail);
     uint32_t expect = be32(idat + idatLen - 4);
@@ -272,14 +281,14 @@ bool loadDogImage(const char* path) {
   if (good) {
     img  = (uint16_t*)malloc((size_t)info.w * info.h * sizeof(uint16_t));
     alph = (uint8_t*)malloc((size_t)info.w * info.h);
-    if (!img || !alph) good = false;
+    if (!img || !alph) { good = false; why = why ? why : "out of memory"; }
   }
 
   uint8_t* rowA = nullptr, *rowB = nullptr;
   if (good) {
     rowA = (uint8_t*)malloc(rowBytes - 1);
     rowB = (uint8_t*)malloc(rowBytes - 1);
-    if (!rowA || !rowB) good = false;
+    if (!rowA || !rowB) { good = false; why = why ? why : "out of memory"; }
   }
 
   if (good) {
@@ -288,7 +297,7 @@ bool loadDogImage(const char* path) {
     for (int y = 0; y < info.h && good; y++) {
       const uint8_t* srow = raw + (size_t)y * rowBytes;
       uint8_t filter = srow[0];
-      if (filter > 4) { good = false; break; }
+      if (filter > 4) { good = false; if (!why) why = "bad scanline filter byte (corrupt IDAT?)"; break; }
 
       for (int x = 0; x < info.w * bpp; x++) {
         uint8_t a = (x >= bpp) ? cur[x - bpp] : 0;
@@ -314,7 +323,7 @@ bool loadDogImage(const char* path) {
           r = g = b2 = cur[x];
         } else if (info.colorType == 3) {
           int idx = cur[x];
-          if (idx >= 256) { good = false; break; }
+          if (idx >= 256) { good = false; if (!why) why = "bad palette index (corrupt IDAT?)"; break; }
           r = palette[idx * 3]; g = palette[idx * 3 + 1]; b2 = palette[idx * 3 + 2];
         } else if (info.colorType == 2) {
           r = cur[x * 3]; g = cur[x * 3 + 1]; b2 = cur[x * 3 + 2];
@@ -332,6 +341,9 @@ bool loadDogImage(const char* path) {
   free(rowA); free(rowB);
 
   if (!good) {
+    // Named failure points above (Adler, inflate rc, OOM at scale-down) printed
+    // themselves; explain the silent ones exactly once.
+    if (why) Serial.printf("[DOG] /%s: %s\n", path, why);
     free(raw); free(idat); free(img); free(alph);
     return false;
   }
