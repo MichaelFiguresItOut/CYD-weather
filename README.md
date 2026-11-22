@@ -327,7 +327,7 @@ Main page: five section tiles.
 | Section | Rows | Behavior |
 |---|---|---|
 | APPEARANCE | THEME, TEMPERATURE, CLOCK, DATE | all four rows tap-to-cycle (theme cycles the 4 themes; the others toggle) |
-| LOCATION | CURRENT LOCATION (display only — "City, Region, CC" plus the postal code when known), ADD LOCATION, LATITUDE, LONGITUDE | ADD LOCATION opens the QWERTY keyboard ("POSTAL CODE OR CITY") — accepts a postal code (US ZIP, ZIP+4, international) or a city name ("NEW YORK, NY", "WELLINGTON, NZ"; letters and the comma come from the keyboard's 123 page); the entered text is uppercased, trimmed, saved immediately, then geocoded via the Open-Meteo Geocoding API with a single Nominatim/OSM fallback request per action for codes or city+state phrases Open-Meteo doesn't index (identifying User-Agent, 1 req/s limit respected); the ADD LOCATION page stays up for the whole lookup (shows `LOOKING UP ON OPEN-METEO...`, then `FALLING BACK TO NOMINATIM...` when Open-Meteo has no match), then lists up to 20 matches on the same screen — one "City, Region, CC" row per place (no coordinates — not useful for choosing), 5 per page with the same `<` / `>` header arrows and `PAGE n/N` footer as the TIME ZONE list when the results fill more than one page — and tapping one applies it: coordinates saved, `locationMode` → MANUAL, resolved name stored (CURRENT LOCATION row), weather refetched; 0 matches or a network failure keeps the entered text and shows `NO MATCH FOR <entry>` / `LOOKUP FAILED - RETRY` on the same page (the header's `< BACK` returns to LOCATION) without touching the coordinates. LATITUDE/LONGITUDE → blocking numeric keypad (range-checked, −90..90 / −180..180; `< BACK` discards, original kept); the keypad opens with the `|` cursor under the digit the finger tapped on the row (tapping the field moves it), digits insert at the cursor, BAK backspaces left of it and DEL deletes right of it — so a coordinate can be fixed in place; on confirming a valid pair: coordinates saved, `locationMode` → MANUAL, a keyless reverse geocode (BigDataCloud) updates CURRENT LOCATION (and the ADD LOCATION row when the service returns a postal code — a failed reverse lookup leaves the name unset but the coordinates stay in use), weather refetched |
+| LOCATION | CURRENT LOCATION (display only — "City, Region, CC" plus the postal code when known), ADD LOCATION, LATITUDE, LONGITUDE | ADD LOCATION opens the QWERTY keyboard ("POSTAL CODE OR CITY") — accepts a postal code (US ZIP, ZIP+4, international) or a city name ("NEW YORK, NY", "WELLINGTON, NZ"; letters and the comma come from the keyboard's 123 page); the entered text is uppercased, trimmed, saved immediately, then geocoded via the Open-Meteo Geocoding API with a single Nominatim/OSM fallback request per action for codes or city+state phrases Open-Meteo doesn't index (identifying User-Agent, 1 req/s limit respected); the ADD LOCATION page stays up for the whole lookup (shows `LOOKING UP ON OPEN-METEO...`, then `FALLING BACK TO NOMINATIM...` when Open-Meteo has no match), then lists up to 20 matches on the same screen — one "City, Region, CC" row per place (no coordinates — not useful for choosing), 5 per page with the same `<` / `>` header arrows and `PAGE n/N` footer as the TIME ZONE list when the results fill more than one page — and tapping one applies it: coordinates saved, `locationMode` → MANUAL, resolved name stored (CURRENT LOCATION row), then the NWS station list is updated automatically on the same page before returning to LOCATION (Phase 6 — status lines and outcome messages in the STATIONS section below), and the weather is refetched with the new station chain; 0 matches or a network failure keeps the entered text and shows `NO MATCH FOR <entry>` / `LOOKUP FAILED - RETRY` on the same page (the header's `< BACK` returns to LOCATION) without touching the coordinates. LATITUDE/LONGITUDE → blocking numeric keypad (range-checked, −90..90 / −180..180; `< BACK` discards, original kept); the keypad opens with the `|` cursor under the digit the finger tapped on the row (tapping the field moves it), digits insert at the cursor, BAK backspaces left of it and DEL deletes right of it — so a coordinate can be fixed in place; on confirming a valid pair: coordinates saved, `locationMode` → MANUAL, a keyless reverse geocode (BigDataCloud) updates CURRENT LOCATION (and the ADD LOCATION row when the service returns a postal code — a failed reverse lookup leaves the name unset but the coordinates stay in use), weather refetched |
 | TIME ZONE | TIME ZONE, DAYLIGHT SAVING | TIME ZONE opens the paginated list (18 zones, 5 per page, `<` / `>` header arrows, `PAGE n/N` footer; opens on the page holding the current zone — rules that match no catalog entry, e.g. a catalog zone with DST toggled off, open page 1 with no row highlighted); the page footer shows how the zone was chosen — `MANUAL - TAP TO CHANGE`, `AUTO - TAP TO CHANGE`, or `AUTO - UNSUPPORTED ZONE` when the automatic IANA id has no catalog mapping (the id itself goes to the serial log, the last valid rules keep running); DAYLIGHT SAVING toggles DST (on = +1 h during the DST window; off = `dstOffsetSec == stdOffsetSec`, window ignored) |
 | WI-FI | CURRENT NETWORK (status), SCAN NETWORKS (scan/join), ADD NETWORK (manual entry), WIFI ON/OFF (power), RESTORE SAVED NETWORK (build-time network) | see below |
 | STATIONS | data source (info), preferred station (info), automatic backups (info), SCAN FOR LOCAL WEATHER STATION | NWS observation-station discovery + automatic fallback list — see below |
@@ -388,13 +388,17 @@ Main page: five section tiles.
   keep the cursor visible. Its bottom row is `123` (letter/symbol pages),
   SPACE and DEL; the shift toggle (`abc`/`ABC`) and BAK sit in the Z-row —
   no duplicated labels in either layout.
-- **STATIONS** (Phase 3/4, `src/nws_station.{h,cpp}`; US coverage only —
+- **STATIONS** (Phase 3/4/6, `src/nws_station.{h,cpp}`; US coverage only —
   footer: `NWS STATIONS (US ONLY) - TAP SCAN TO LOOK UP`): the info block
   shows `WEATHER DATA BY OPEN-METEO.COM`, then `PREFERRED STATION` and the
   selected station — `KABC - AMARILLO, GILLETTE FIELD` (size 2, truncated
   to fit) with `x.x KM AWAY - ASOS` below (provider, e.g. `ASOS`,
-  `ASOS-HFM`) — or, when the location has no NWS station (outside NWS
-  coverage), `NO NWS STATION FOR THIS LOCATION` / `USING OPEN-METEO`;
+  `ASOS-HFM`) and, after the first successful fetch, `NOW USING: KABC`
+  (white) or `NOW USING: KABC (BACKUP)` / `NOW USING: OPEN-METEO` (dim) —
+  the source that actually supplied the last dashboard update (a backup id
+  when the preferred's observation was stale or unavailable) — or, when the
+  location has no NWS station (outside NWS coverage),
+  `NO NWS STATION FOR THIS LOCATION` / `USING OPEN-METEO`;
   below the SCAN button it shows the firmware-managed automatic backup
   list (`BACKUPS: KLGA KTEB KEWR`, or `BACKUPS: NONE`). The only button is
   `SCAN FOR LOCAL WEATHER STATION`. The scan (blocking; a message page with `PLEASE WAIT` footer
@@ -426,9 +430,31 @@ Main page: five section tiles.
   100 km, CoCoRaHS excluded, never the pick itself) and persists them in
   NVS (`cydwx/nwsStnBk`); all of it survives reboot. The backup list is
   managed internally (never user-configurable) and is rebuilt on every
-  selection. Selection is informational for now (Phase 5 wires it into the
-  dashboard: first usable observation in the order preferred → backups,
-  then Open-Meteo).
+  selection. Phase 5 wires the selection into the dashboard: the temperature
+  and feels-like come from the first usable observation in the order
+  preferred → backups, then Open-Meteo (the main screen's data-age line
+  shows which source supplied it — `NWS KLGA 24m - OM 15m`, see the
+  dashboard table above).
+- **Phase 6 — automatic station update on a location change:** the SCAN
+  button above is the manual refresh (with the step-by-step status messages
+  and the `REFRESH` row on the results page). On top of that, confirming a
+  new location on the ADD LOCATION page (tapping a search result) updates
+  the station list automatically on the same page before returning to
+  LOCATION: the previous selection is invalidated first (it belongs to the
+  old location and must not be reused), the discovery runs with the centered
+  status lines (`UPDATING NWS STATIONS...`, `CONNECTING TO WIFI...`,
+  `LOOKING UP NWS POINT...`, `FETCHING STATION LIST...` — same pattern as
+  the Open-Meteo location lookup), and the first suitable station (nearest
+  first, CoCoRaHS excluded) becomes the preferred with the automatic
+  backups recorded from the same list — exactly what a SCAN selection
+  persists (the user can still change the pick afterwards via SCAN). The
+  outcome is shown briefly before returning to LOCATION:
+  `NWS: KLGA + 3 BACKUPS` (neutral color), `NO NWS STATIONS - USING
+  OPEN-METEO` outside NWS coverage / with an empty list, `NO SUITABLE
+  STATION - OPEN-METEO` when no station meets the suitability bar, or
+  `STATION UPDATE FAILED - RETRY` on a transient network/API failure — the
+  SCAN button on this page re-runs the discovery, and a failure never
+  touches the coordinates or any unrelated setting (Wi-Fi, timezone).
 
 ## WiFi
 - Build-time defaults + site location live in `src/local_config.h` (gitignored — copy `src/local_config.h.example` to `src/local_config.h` and fill in your WiFi SSID/password and your site's lat/lon; never commit real values). Runtime credentials are read through one seam, `wifiCredentials()` (`wifi_conn.cpp`), which prefers **user-saved NVS credentials** (`cydwx/ssid` + `cydwx/pass`, written by the Settings > WI-FI page on a successful join — `wifiSaveCredentials()`) and falls back to the build-time values. NVS is plaintext (no encryption; acceptable for this device). Auto-reconnect in `loop()` (`WIFI_RETRY_MS` 10 s check).
@@ -475,6 +501,105 @@ log from t=0 (a plain port open does NOT reliably reset this board, verified
   time, `DNS failed`, HTTP code) — an explicit `DNS failed` distinguishes DNS
   from TCP/TLS when a fetch returns -1.
 - Boot-time `[SD]` / `[DOG]` lines: see the Dog outfit images section.
+
+## SD card: intermittent read failures (investigated; root cause not proven)
+The board intermittently loses the dog image mid-run: boot SD init succeeds,
+then PNG reads fail (dog falls back to `error.png`) until a chip RESET. This
+is a **separate issue** from the PNG chunk-type `strcmp()`/`memcmp()` bug
+(fixed 2026-11-20 — see "Chunk-type comparison trap" in the Dog outfit images
+section): that was a decoder bug, not an SD communication problem. The failure
+signature here is different — init succeeds and the files on the card are
+valid, but individual sector reads fail. The earlier 2026-11-19 failure
+history is in `docs/CYD-HARDWARE.md` ("SD card PNG pipeline", SD wiring item).
+
+**Setup (as built / verified):**
+- The SD card is driven by Arduino `SD.h` over a dedicated `HSPI` (SPI2)
+  instance (`SPIClass sdSpi(HSPI)`; the TFT owns VSPI/SPI3).
+- Pins (CYD schematic; `docs/CYD-HARDWARE.md`): CS 5, SCK 18, MISO 19, MOSI 23.
+- Initialization runs at 400 kHz (forced by the driver); normal data transfer
+  runs at 16 MHz (`SD.begin(SD_CS, sdSpi, 16000000)` in `src/weather.cpp`).
+- Stack: PlatformIO `espressif32` 8.0.0, Arduino-ESP32 3.3.12, bundled
+  ESP-IDF v5.5.5.
+
+**Confirmed driver behavior** (verified against the installed framework
+source, `libraries/SD/src/sd_diskio.cpp` + prebuilt FatFs):
+- Initialization and normal reads use Arduino's own SPI implementation, not
+  the ESP-IDF SDMMC driver.
+- CMD17 handles single-block reads; CMD18 handles multi-block reads; CMD12
+  (STOP_TRANSMISSION) terminates a multi-block transfer.
+- FatFs batches contiguous reads, so PNG IDAT data can involve multi-block
+  (CMD18 + CMD12) transfers; small reads (chunk headers, skips) use CMD17.
+- The driver verifies the per-sector CRC16 and discards mismatched data.
+- The existing retries re-issue clean transactions and can recover from some
+  individual transfer failures, but they cannot clear a persistent
+  `STA_NOINIT` state or reliably recover a card left in multi-block mode
+  after an unsuccessful CMD12.
+- Once `STA_NOINIT` is set, subsequent reads are rejected without
+  communicating with the card. A complete re-initialization is needed to clear
+  that state.
+- The current firmware does not automatically re-initialize the SD card after
+  a failed read (only the 3× boot-time `SD.begin()` / 3× load retries in
+  `weatherInitSdAndDog()`).
+- Pressing RESET restarts the ESP32 and runs SD initialization again. This can
+  restore operation, but does not establish the original cause.
+
+**Previously investigated Espressif issue (not applicable):** issue
+[#14000](https://github.com/espressif/esp-idf/issues/14000) (SDSPI CMD52 CRC)
+was investigated and found not directly applicable — our Arduino SPI driver
+does not use CMD52, `sdmmc_io_reset()`, or `sdmmc_card_init()`, so its CMD52
+CRC fix does not address our read path.
+
+**What the evidence suggests, but does not prove:**
+- Successful initialization at 400 kHz followed by failed reads at 16 MHz is
+  consistent with an electrical/signal-integrity problem.
+- Marginal SD-slot contact is a possibility, not a confirmed diagnosis.
+- A failed CMD12 could leave the card in multi-block state and cause
+  subsequent reads to fail for the rest of the boot.
+- A persistent `STA_NOINIT` flag could independently prevent all further
+  reads during that boot.
+
+**What remains unknown:**
+- The exact cause of the intermittent failures.
+- Whether failures are caused by CRC errors, missing data tokens,
+  command-response failures, CMD12 failures, or electrical interference.
+- Whether the card is physically losing communication or entering a protocol
+  state from which the current driver cannot recover.
+- The actual cause of the most recent incident, because its serial output was
+  not captured.
+
+**Diagnostic logging gap (closed 2026-11-22):** with `CORE_DEBUG_LEVEL=0`
+the driver's own error messages are compiled out, and the two data-phase
+failures (missing data start token, CRC16 mismatch) print nothing at any log
+level. To close this gap the project carries a local copy of the SD driver at
+`lib/SD/` — a verbatim copy of the framework's `libraries/SD` (Arduino SD
+library 3.3.12, from framework-arduinoespressif32 4.30312.261024, copied
+2026-11-22) which PlatformIO prefers over the framework copy. Only one file
+was modified, `lib/SD/src/sd_diskio.cpp` (the marked `CYD diagnostic` blocks):
+it adds final-failure diagnostics that print directly to `Serial`, so they
+are visible at `CORE_DEBUG_LEVEL=0`:
+
+- **Data start token**: if the 0xFE token is not received within 500 ms the
+  read logs the received value (0xFF = timeout, no data at all; any other
+  value = wrong token/garbage) with the operation and sector, e.g.
+  `[SD] data token fail: got 0xFF, expected 0xFE (CMD18 sector 32775)`.
+- **CRC16 mismatch**: the received and expected CRC values are logged with
+  the operation and sector, e.g.
+  `[SD] CRC16 fail: got 0x1234, expected 0xABCD (CMD17 sector 32775, len 512)`.
+- **Command failures**: `sdCommand()` logs the final failure with the command
+  number/mnemonic, the raw response byte, and a decoded reason (R1 error
+  bits), e.g. `[SD] CMD fail: cmd 12 CMD12 STOP_TRANSMISSION rsp=0x05
+  (illegal command)`. This includes CMD12 failures that leave the card in
+  multi-block state **without** setting `STA_NOINIT`, and the no-response path
+  **that does** set `STA_NOINIT` (`... (STA_NOINIT set)`).
+
+The additions are logging-only: protocol behavior, retry counts, timing,
+pins, and SPI configuration are unchanged. The firmware binary built on
+2026-11-22 was verified to compile `lib/SD/src/sd_diskio.cpp` (not the
+framework copy) and to contain all diagnostic strings; it needs to be flashed
+(`pio run -t upload`, see the "Flash procedure" section above) before the next
+failure capture is useful. If the problem recurs, capture the failing boot with
+`test/capture_boot.py` — the `[SD]` lines above now directly separate CRC
+errors from token/protocol failures and identify which command failed.
 
 ## CYD location and weather system — actionable roadmap
 
