@@ -17,6 +17,9 @@ test/*.png
 test/*.jpg
 test/*.txt
 
+# Scratch folder (images/notes handed to the agent for review; never synced)
+scratch-folder/
+
 # Manual file backups (superseded by git history)
 *.bak-*
 
