@@ -53,6 +53,7 @@
 #include "timezones.h"
 #include "wifi_conn.h"
 #include "nws_station.h"
+#include "time_util.h"   // ntpIsSynced()
 #include "weather.h"
 
 namespace {
@@ -739,11 +740,13 @@ void draw() {
 //
 //  Flow (the page stays up through the whole lookup, same pattern as the
 //  ADD LOCATION search): tap SCAN -> stnDiscover():
-//    wifi check -> points lookup -> station list -> per-page observation
-//    checks (stnCheckPage, up to STN_PER_PAGE requests) -> results.
+//    wifi check -> points lookup -> station list -> Phase 6.5 quality
+//    auto-selection (observation checks of up to 8 nearest suitable with a
+//    progress line each, then persist preferred + backups) -> per-page
+//    observation checks for display (stnCheckPage) -> results.
 //  A row tap selects that station (stnSelect: persist + record the
-//  automatic backup list from the same scan results (Phase 4) + back to
-//  the STATIONS page); a REFRESH row re-runs the discovery. A definite
+//  automatic backups from the same scan's quality ranking (Phase 6.5) +
+//  back to the STATIONS page); a REFRESH row re-runs the discovery. A definite
 //  "no stations" outcome (outside NWS coverage / empty list) shows the
 //  message briefly, clears the selection and backups, and returns to the
 //  STATIONS page. A temporary failure (network/API) shows a retry message
@@ -752,6 +755,7 @@ void draw() {
 
 void stnClearSelection();   // defined below stnDiscover, which calls it
 void stnSelect(int i);
+void postalStatus(const char* m, bool done, bool good);   // defined below
 
 void stnReset() {
   stnPhase = STN_MSG;
@@ -763,6 +767,104 @@ void stnReset() {
 int stnPageCount() {
   int p = (stnCount + STN_PER_PAGE - 1) / STN_PER_PAGE;
   return (p < 1) ? 1 : p;
+}
+
+// ---------------------------------------------------------------------------
+//  Phase 6.5: quality-based selection, shared by the manual SCAN
+//  (stnDiscover) and the automatic post-location-change update
+//  (autoDiscoverStations): same check set, same ranking, same persistence.
+// ---------------------------------------------------------------------------
+
+// Observation check set: the NWS_RANK_CHECK_MAX nearest suitable stations
+// within NWS_RANK_RADIUS_MAX_KM (stn[] is nearest-first after
+// nwsRankPrepare; that is equivalent to growing a 10 km radius in 10 km
+// steps up to 100 km). Writes station indices into idx.
+int stnRankCheckSet(int* idx, int maxIdx) {
+  int n = 0;
+  for (int i = 0; i < stnCount && n < maxIdx; i++) {
+    if (!nwsStationSuitable(&stn[i])) continue;
+    if (stn[i].distKm > NWS_RANK_RADIUS_MAX_KM) break;   // nearest first
+    idx[n++] = i;
+  }
+  return n;
+}
+
+// Persist preferred + automatic backups (Phase 4 shape, Phase 6.5 content)
+// to NVS and log one line.
+void stnPersistSelection(const NwsStation* pref, const NwsStation* backups,
+                         int nBk, const char* how) {
+  snprintf(userSettings.nwsStationId, sizeof(userSettings.nwsStationId),
+           "%s", pref->id);
+  snprintf(userSettings.nwsStationName, sizeof(userSettings.nwsStationName),
+           "%s", pref->name);
+  userSettings.nwsStationDistKm = pref->distKm;
+  snprintf(userSettings.nwsStationProvider, sizeof(userSettings.nwsStationProvider),
+           "%s", pref->provider);
+  for (int k = 0; k < NWS_BACKUP_MAX; k++)
+    snprintf(userSettings.nwsStationBackup[k],
+             sizeof(userSettings.nwsStationBackup[k]),
+             "%s", k < nBk ? backups[k].id : "");
+  saveNwsStation();
+  char bkl[36] = "";
+  for (int k = 0; k < nBk; k++) {
+    char t[9];
+    snprintf(t, sizeof(t), " %s", backups[k].id);
+    strncat(bkl, t, sizeof(bkl) - strlen(bkl) - 1);
+  }
+  Serial.printf("[STN] %s: %s (%s) %.1f km backups:%s\n", how, pref->id,
+                pref->name, (double)pref->distKm, bkl);
+}
+
+// Check the observations of the check set (one progress line per station
+// so the page never looks frozen) and persist the quality-ranked preferred
+// + up to NWS_BACKUP_MAX backups. prog picks the progress-line style
+// (this page's stnMsg vs the ADD LOCATION centered status line).
+// Returns 0 when a selection was persisted, -1 when no suitable station
+// exists at all (the selection is left untouched; the caller shows its
+// own message).
+enum StnProg { STNPROG_SCAN, STNPROG_POSTAL };
+int stnAutoSelect(StnProg prog) {
+  int idx[NWS_RANK_CHECK_MAX];
+  const int nCheck = stnRankCheckSet(idx, NWS_RANK_CHECK_MAX);
+  if (nCheck == 0) {
+    // Sparse area: no suitable station within NWS_RANK_RADIUS_MAX_KM.
+    // Keep the Phase 6 behavior: nearest suitable overall (any distance),
+    // backups by the 100 km rule (none qualify there).
+    int pick = -1;
+    for (int i = 0; i < stnCount; i++)
+      if (nwsStationSuitable(&stn[i])) { pick = i; break; }
+    if (pick < 0) return -1;
+    NwsStation tmp[NWS_BACKUP_MAX];
+    const int nBk = nwsBuildFallbackList(stn, stnCount, stn[pick].id, tmp,
+                                         NWS_BACKUP_MAX);
+    stnPersistSelection(&stn[pick], tmp, nBk, "auto (nearest beyond 100 km)");
+    return 0;
+  }
+  if (ntpIsSynced()) {
+    for (int k = 0; k < nCheck; k++) {
+      if (prog == STNPROG_SCAN) {
+        snprintf(stnMsg, sizeof(stnMsg), "CHECKING %s ...", stn[idx[k]].id);
+        stnPhase = STN_SEARCHING;
+        draw();
+        delay(50);
+      } else {
+        char m[24];
+        snprintf(m, sizeof(m), "CHECKING %s ...", stn[idx[k]].id);
+        postalStatus(m, false, false);
+      }
+      nwsFetchLatestObs(&stn[idx[k]]);
+    }
+  }
+  // Candidates = the check set (nearest first). Without NTP the ranking
+  // is plain nearest order and no observation was fetched (no reliable
+  // freshness comparison is possible).
+  NwsStation cand[NWS_RANK_CHECK_MAX];
+  for (int k = 0; k < nCheck; k++) cand[k] = stn[idx[k]];
+  NwsStation sel[NWS_BACKUP_MAX + 1];
+  const int nSel = nwsRankStations(cand, nCheck, ntpIsSynced(), nullptr,
+                                   sel, NWS_BACKUP_MAX + 1);
+  stnPersistSelection(&sel[0], sel + 1, nSel - 1, "auto (quality-ranked)");
+  return 0;
 }
 
 // Fetch the latest observation for the current page's stations that
@@ -846,6 +948,14 @@ void stnDiscover() {
     stnClearSelection();
     return;
   }
+  // Phase 6.5: distances from the user's coordinates (nearest-first),
+  // then the quality auto-selection - observation checks of up to 8
+  // nearest suitable stations with a progress line each, persisting the
+  // preferred + automatic backups. The results below remain tappable to
+  // override the pick.
+  nwsRankPrepare(stn, stnCount, userSettings.lat, userSettings.lon);
+  if (stnAutoSelect(STNPROG_SCAN) < 0)
+    Serial.println("[STN] scan: no suitable station, selection untouched");
   stnPage = 0;
   stnCheckPage();                       // -> results
 }
@@ -869,35 +979,23 @@ void stnClearSelection() {
 }
 
 // Row tap on the Local Weather Station page: select that station (persisted
-// to NVS), record the automatic backup list (Phase 4), and return to the
+// to NVS), record the automatic backups (Phase 6.5), and return to the
 // STATIONS page with the local station populated.
 void stnSelect(int i) {
   if (i < 0 || i >= stnCount) return;
   const NwsStation* s = &stn[i];
-  snprintf(userSettings.nwsStationId, sizeof(userSettings.nwsStationId), "%s", s->id);
-  snprintf(userSettings.nwsStationName, sizeof(userSettings.nwsStationName), "%s", s->name);
-  userSettings.nwsStationDistKm = s->distKm;
-  snprintf(userSettings.nwsStationProvider, sizeof(userSettings.nwsStationProvider),
-           "%s", s->provider);
-  // Phase 4: automatic backups from the SAME scan results (NWS order =
-  // nearest first): up to 3 suitable stations within NWS_BACKUP_MAX_KM,
-  // never the pick itself. A short list simply means fewer backups - a
-  // scan that only yields the pick still selects it.
+  // Phase 6.5: automatic backups = the same quality ranking over the
+  // scan's check set (suitable, within NWS_RANK_RADIUS_MAX_KM, observations
+  // where checked), excluding the pick itself. Without NTP that is plain
+  // nearest order - exactly the Phase 4 nwsBuildFallbackList result.
+  int idx[NWS_RANK_CHECK_MAX];
+  const int nCheck = stnRankCheckSet(idx, NWS_RANK_CHECK_MAX);
+  NwsStation cand[NWS_RANK_CHECK_MAX];
+  for (int k = 0; k < nCheck; k++) cand[k] = stn[idx[k]];
   NwsStation tmp[NWS_BACKUP_MAX];
-  const int nBk = nwsBuildFallbackList(stn, stnCount, s->id, tmp, NWS_BACKUP_MAX);
-  for (int k = 0; k < NWS_BACKUP_MAX; k++)
-    snprintf(userSettings.nwsStationBackup[k],
-             sizeof(userSettings.nwsStationBackup[k]), "%s",
-             k < nBk ? tmp[k].id : "");
-  saveNwsStation();
-  char bkl[36] = "";
-  for (int k = 0; k < nBk; k++) {
-    char t[9];
-    snprintf(t, sizeof(t), " %s", tmp[k].id);
-    strncat(bkl, t, sizeof(bkl) - strlen(bkl) - 1);
-  }
-  Serial.printf("[STN] selected: %s (%s) %.1f km backups:%s\n",
-                s->id, s->name, (double)s->distKm, bkl);
+  const int nBk = nwsRankStations(cand, nCheck, ntpIsSynced(), s->id, tmp,
+                                  NWS_BACKUP_MAX);
+  stnPersistSelection(s, tmp, nBk, "selected");
   page = PAGE_STATIONS;
   sGrid = 2;
   draw();
@@ -1282,10 +1380,12 @@ void editLocation() {
 //     invalidated first: it belongs to the old location and must not be
 //     reused for the new one.
 //  2. Discovery runs: the NWS points lookup, the station list, then the
-//     first SUITABLE station (NWS order = nearest first) becomes the
-//     preferred and the automatic backups are recorded from the same list
-//     — exactly what a SCAN selection would persist. The user can still
-//     change the pick afterwards (STATIONS page -> SCAN -> tap a row).
+//     Phase 6.5 quality selection: the observations of up to 8 nearest
+//     suitable stations are checked (one status line each) and the
+//     preferred + automatic backups are the quality-ranked result (distance
+//     + freshness; nwsRankStations) — exactly what a SCAN auto-selection
+//     would persist. The user can still change the pick afterwards
+//     (STATIONS page -> SCAN -> tap a row).
 //  3. The outcome is shown briefly, then applyLocation() returns to the
 //     LOCATION page:
 //       stations found       "NWS: KLGA + 3 BACKUPS" (neutral color)
@@ -1346,38 +1446,26 @@ void autoDiscoverStations() {
   if (stnCount < 0)  { postalStatus("STATION UPDATE FAILED - RETRY", true, false); return; }
   if (stnCount == 0) { postalStatus("NO NWS STATIONS - USING OPEN-METEO", true, false); return; }
 
-  // 2) First suitable station (NWS order = nearest first) -> preferred.
-  int pick = -1;
-  for (int i = 0; i < stnCount; i++)
-    if (nwsStationSuitable(&stn[i])) { pick = i; break; }
-  if (pick < 0) { postalStatus("NO SUITABLE STATION - OPEN-METEO", true, false); return; }
-
-  const NwsStation* s = &stn[pick];
-  snprintf(userSettings.nwsStationId, sizeof(userSettings.nwsStationId), "%s", s->id);
-  snprintf(userSettings.nwsStationName, sizeof(userSettings.nwsStationName), "%s", s->name);
-  userSettings.nwsStationDistKm = s->distKm;
-  snprintf(userSettings.nwsStationProvider, sizeof(userSettings.nwsStationProvider),
-           "%s", s->provider);
-  NwsStation tmp[NWS_BACKUP_MAX];
-  const int nBk = nwsBuildFallbackList(stn, stnCount, s->id, tmp, NWS_BACKUP_MAX);
-  for (int k = 0; k < NWS_BACKUP_MAX; k++)
-    snprintf(userSettings.nwsStationBackup[k],
-             sizeof(userSettings.nwsStationBackup[k]), "%s",
-             k < nBk ? tmp[k].id : "");
-  saveNwsStation();
-  char bkl[36] = "";
-  for (int k = 0; k < nBk; k++) {
-    char t[9];
-    snprintf(t, sizeof(t), " %s", tmp[k].id);
-    strncat(bkl, t, sizeof(bkl) - strlen(bkl) - 1);
+  // 2) Phase 6.5 quality selection: check the observations of up to
+  // NWS_RANK_CHECK_MAX nearest suitable stations (one progress line each,
+  // the page stays alive) and persist the quality-ranked preferred +
+  // automatic backups. Sparse areas (nothing suitable within
+  // NWS_RANK_RADIUS_MAX_KM) keep the Phase 6 fallback: nearest suitable
+  // overall (any distance).
+  nwsRankPrepare(stn, stnCount, userSettings.lat, userSettings.lon);
+  if (stnAutoSelect(STNPROG_POSTAL) < 0) {
+    postalStatus("NO SUITABLE STATION - OPEN-METEO", true, false);
+    return;
   }
-  Serial.printf("[STN] auto-selected after location change: %s (%s) %.1f km backups:%s\n",
-                s->id, s->name, (double)s->distKm, bkl);
 
   // 3) Brief result, then applyLocation() returns to the LOCATION page.
+  int nBk = 0;
+  for (int k = 0; k < NWS_BACKUP_MAX; k++)
+    if (userSettings.nwsStationBackup[k][0]) nBk++;
   char m[40];
-  if (nBk > 0) snprintf(m, sizeof(m), "NWS: %s + %d BACKUPS", s->id, nBk);
-  else         snprintf(m, sizeof(m), "NWS: %s", s->id);
+  if (nBk > 0) snprintf(m, sizeof(m), "NWS: %s + %d BACKUPS",
+                        userSettings.nwsStationId, nBk);
+  else         snprintf(m, sizeof(m), "NWS: %s", userSettings.nwsStationId);
   postalStatus(m, true, true);
 }
 

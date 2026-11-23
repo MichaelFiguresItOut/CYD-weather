@@ -562,3 +562,79 @@ float nwsFeelsLikeF(float tempF, float windMph, float relHumPct) {
     return nwsHeatIndexF(tempF, relHumPct);
   return tempF;   // in between, or missing inputs: air temperature
 }
+
+// ---------------------------------------------------------------------------
+//  Phase 6.5: quality-based preferred + backup selection - rules in
+//  nws_station.h. Pure logic, host-testable (test/nws/test_rank.py
+//  mirrors this 1:1).
+// ---------------------------------------------------------------------------
+
+float nwsHaversineKm(float lat1, float lon1, float lat2, float lon2) {
+  const float R = 6371.0088f;   // mean Earth radius, km
+  const float dLat = radians(lat2 - lat1);
+  const float dLon = radians(lon2 - lon1);
+  const float a = sinf(dLat * 0.5f) * sinf(dLat * 0.5f) +
+                  cosf(radians(lat1)) * cosf(radians(lat2)) *
+                  sinf(dLon * 0.5f) * sinf(dLon * 0.5f);
+  return 2.0f * R * asinf(sqrtf(a > 1.0f ? 1.0f : a));
+}
+
+void nwsRankPrepare(NwsStation* st, int n, float lat, float lon) {
+  if (!st || n < 1) return;
+  for (int i = 0; i < n; i++)
+    st[i].distKm = nwsHaversineKm(lat, lon, st[i].lat, st[i].lon);
+  // Insertion sort, nearest first (n <= 15 in practice).
+  for (int i = 1; i < n; i++) {
+    NwsStation key = st[i];
+    int j = i - 1;
+    while (j >= 0 && st[j].distKm > key.distKm) { st[j + 1] = st[j]; j--; }
+    st[j + 1] = key;
+  }
+}
+
+int nwsRankStations(const NwsStation* cands, int nCands, bool ntpOK,
+                    const char* excludeId, NwsStation* out, int maxOut) {
+  if (!cands || !out || maxOut < 1 || nCands < 1) return 0;
+  const int NMAX = 32;   // callers pass <= STN_MAX (15); clamp defensively
+  if (nCands > NMAX) nCands = NMAX;
+  int rem[NMAX];         // indices into cands, nearest first
+  int nRem = 0;
+  for (int i = 0; i < nCands; i++) {
+    if (!nwsStationSuitable(&cands[i])) continue;              // CoCoRaHS
+    if (excludeId && excludeId[0] &&
+        strcmp(cands[i].id, excludeId) == 0) continue;
+    rem[nRem++] = i;
+  }
+  int n = 0;
+  while (n < maxOut && nRem > 0) {
+    int best = -1;
+    if (ntpOK) {
+      // Anchor = nearest remaining candidate with a usable observation.
+      int anchor = -1;
+      for (int k = 0; k < nRem; k++)
+        if (nwsObsUsable(&cands[rem[k]])) { anchor = k; break; }
+      if (anchor >= 0) {
+        best = anchor;
+        const float win = cands[rem[anchor]].distKm + NWS_RANK_COMPETE_KM;
+        long fresh = cands[rem[anchor]].obsAgeSec;
+        for (int k = 0; k < nRem; k++) {        // freshest inside the window
+          if (!nwsObsUsable(&cands[rem[k]]) || cands[rem[k]].distKm > win)
+            continue;
+          if (cands[rem[k]].obsAgeSec < fresh) fresh = cands[rem[k]].obsAgeSec;
+        }
+        if (cands[rem[anchor]].obsAgeSec - fresh >= NWS_RANK_MIN_NEWER_S) {
+          for (int k = 0; k < nRem; k++) {      // pick it (nearest on a tie)
+            if (!nwsObsUsable(&cands[rem[k]]) || cands[rem[k]].distKm > win)
+              continue;
+            if (cands[rem[k]].obsAgeSec == fresh) { best = k; break; }
+          }
+        }
+      }
+    }
+    if (best < 0) best = 0;   // no usable (or no NTP): nearest remaining
+    out[n++] = cands[rem[best]];
+    rem[best] = rem[nRem - 1];
+    nRem--;
+  }
+  return n;
+}

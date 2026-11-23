@@ -156,3 +156,60 @@ float nwsHeatIndexF(float tempF, float relHumPct);
 // the air temperature itself. A NaN wind/RH input makes the corresponding
 // term inapplicable (falls through to air temperature).
 float nwsFeelsLikeF(float tempF, float windMph, float relHumPct);
+
+// ---------------------------------------------------------------------------
+//  Phase 6.5: quality-based preferred + backup selection
+//
+//  Replaces "first eligible station wins": the observation state of up to
+//  NWS_RANK_CHECK_MAX nearby eligible stations (found nearest-first within
+//  NWS_RANK_RADIUS_MAX_KM, i.e. a 10 km radius grown in 10 km steps) is
+//  checked, and the preferred station plus up to NWS_BACKUP_MAX backups are
+//  picked from them with nwsRankStations(), balancing distance and
+//  observation freshness:
+//
+//    - The nearest candidate with a USABLE observation (nwsObsUsable:
+//      fetched, NTP-synced age, <= NWS_OBS_FRESH_MAX_S) is the anchor.
+//    - A usable candidate at most NWS_RANK_COMPETE_KM farther may replace
+//      the anchor only if its observation is at least NWS_RANK_MIN_NEWER_S
+//      newer. Equal ages (or a smaller difference) keep the nearer one.
+//    - The same process repeats on the remaining candidates for the
+//      backups.
+//    - Candidates whose observation is stale, failed or not fetched are
+//      never excluded - they are ranked after all usable ones, nearest
+//      first, so a temporary API failure only costs one selection cycle.
+//    - Without NTP no age can be known, and a round with no usable
+//      observation falls back to plain nearest order (never unreliable
+//      freshness comparisons).
+//
+//  Pure/host-testable: test/nws/test_rank.py mirrors this 1:1.
+// ---------------------------------------------------------------------------
+
+// Number of nearby eligible stations whose observation is checked during
+// selection (budget: one HTTP request per station).
+#define NWS_RANK_CHECK_MAX 8
+// Maximum search radius (km) when gathering the check set. Kept in step
+// with NWS_BACKUP_MAX_KM: beyond it a station could not become a backup
+// anyway, so checking it could only ever cost a request for no benefit.
+#define NWS_RANK_RADIUS_MAX_KM 100.0f
+// A usable candidate may compete for the anchor slot only if it is at most
+// this much farther away...
+#define NWS_RANK_COMPETE_KM 10.0f
+// ...and its observation is at least this much newer than the anchor's.
+#define NWS_RANK_MIN_NEWER_S (20L * 60)
+
+// Great-circle distance (km) between two WGS84 points.
+float nwsHaversineKm(float lat1, float lon1, float lat2, float lon2);
+
+// Phase 6.5 preparation: replace each station's distKm with the haversine
+// distance from (lat, lon) and reorder the array nearest-first (in
+// place). The ranking always works on distances computed from the user's
+// own coordinates, never on the NWS-provided field or the API's order.
+void nwsRankPrepare(NwsStation* st, int n, float lat, float lon);
+
+// Phase 6.5 ranking (rules in the section doc above). `cands` must be
+// nearest-first (nwsRankPrepare); CoCoRaHS entries and `excludeId`
+// (NULL/"" = none) are ignored. Fills `out` with up to `maxOut` stations
+// in selection order: [preferred, backup 1..N]. Returns the count stored
+// (0 = no eligible candidate).
+int nwsRankStations(const NwsStation* cands, int nCands, bool ntpOK,
+                    const char* excludeId, NwsStation* out, int maxOut);
