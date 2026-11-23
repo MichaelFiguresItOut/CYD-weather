@@ -16,8 +16,8 @@
 //  changes — never continuously.
 // ---------------------------------------------------------------------------
 
-// How a location/timezone value was chosen. Persisted PER SETTING, so the two
-// stay independent (automatic location + manual timezone, or vice versa):
+// How a location value was chosen (the timezone is automatic only — it
+// always follows the location and has no mode of its own):
 //   UNCONFIGURED – no mode chosen yet; first successful auto-detection fills
 //                  it in (and leaves the mode AUTOMATIC)
 //   AUTOMATIC    – firmware determines it from network-based services;
@@ -60,8 +60,12 @@ struct UserSettings {
                                   // code, or a city name); "" = none
   char placeName[56];             // resolved location display ("City, Region,
                                   // Country") from geocoding; "" = not resolved
-  TimezoneRules timezone;         // local timezone + DST rules; default US Eastern
-  SettingMode timezoneMode;       // how the timezone was chosen
+  // Timezone: automatic only (Phase 2A/2B) — resolved from the active
+  // location on every weather fetch (IANA id -> catalog rules, timezones.h).
+  // There is no manual selection: whatever is stored here is the last
+  // auto-resolved rules, kept as a cache so the clock stays correct until
+  // the next fetch replaces it.
+  TimezoneRules timezone;         // last auto-resolved rules; default US Eastern
   int  theme;                     // selected theme (0..THEME_COUNT-1)
   bool useCelsius;                // temperature display: false = Fahrenheit
   bool use24Hour;                 // clock: false = US 12-hour ("2:35 PM")
@@ -90,13 +94,12 @@ extern Preferences prefs;
 
 // Boot: open the "cydwx" NVS namespace and restore every persisted setting.
 // Called in setup() before the first render and before NTP/weather use the
-// values. Existing-install migration: a setting whose mode was never saved
+// values. Existing-install migration: a location whose mode was never saved
 // loads as MANUAL (its default value is the value it was always running
-// with), so previously working locations/timezones are never handed to
-// automatic detection. The timezone is the one exception (Phase 2B): a zone
-// that was never saved loads as AUTOMATIC, and the first weather fetch then
-// resolves the same built-for-site zone from the built-for-site
-// coordinates - the displayed time is unchanged either way.
+// with), so a previously working location is never handed to automatic
+// detection. The timezone has no mode of its own: the stored rules load as
+// the last auto-resolved cache, and the first weather fetch refreshes them
+// from the active location.
 void loadSettings();
 
 // Explicit per-setting saves — each writes only its own keys, so saving one
@@ -104,7 +107,7 @@ void loadSettings();
 // picker selection) and after a successful automatic detection.
 void saveTheme();            // theme index (also records the numbering version)
 void saveLocation();         // lat/lon + location mode
-void saveTimezone();         // timezone rules + timezone mode
+void saveTimezone();         // timezone rules (last auto-resolved cache)
 void saveDisplaySettings();  // temp unit, clock format, date format
 void saveNwsStation();       // selected NWS station (id/name/distance/provider)
 
@@ -112,24 +115,23 @@ void saveNwsStation();       // selected NWS station (id/name/distance/provider)
 // one section and persist the cleared state. Nothing outside the section
 // is touched.
 void resetLocation();   // lat/lon -> 0, postal code/place name -> "", mode -> UNCONFIGURED
-void resetTimezone();   // mode -> AUTOMATIC; last valid rules kept until the
-                        // next Open-Meteo resolution (Phase 2A)
 
-// Automatic-detection seam for the future geolocation/timezone services:
-// true while the setting may be (re)determined automatically — UNCONFIGURED
-// (first time) or AUTOMATIC (refresh). MANUAL is never overwritten.
+// Automatic-detection seam for the future geolocation service: true while
+// the location may be (re)determined automatically — UNCONFIGURED (first
+// time) or AUTOMATIC (refresh). MANUAL is never overwritten.
 bool locationAutoAllowed();
-bool timezoneAutoAllowed();
-// Apply an auto-detected value. Returns false (value unchanged) when the
-// setting is MANUAL or the value is invalid. On success the mode becomes
-// AUTOMATIC (UNCONFIGURED transitions on first detection) and the change is
-// persisted. tz.name must point to persistent storage (it is kept as a
-// pointer in userSettings and copied into NVS on save).
+// Apply an auto-detected value. Location: returns false (value unchanged)
+// when the setting is MANUAL or the value is invalid; on success the mode
+// becomes AUTOMATIC (UNCONFIGURED transitions on first detection) and the
+// change is persisted. Timezone: automatic only, so this always applies;
+// the value must be a valid TimezoneRules. tz.name must point to persistent
+// storage (it is kept as a pointer in userSettings and copied into NVS on
+// save).
 bool applyAutoLocation(float lat, float lon);
 bool applyAutoTimezone(const TimezoneRules& tz);
 // Phase 2A: IANA id from Open-Meteo (timezone=auto, e.g. "America/New_York")
-// -> catalog zone -> applied as the automatic timezone. No-op under MANUAL
-// mode; an unsupported id keeps the last valid rules.
+// -> catalog zone -> applied as the automatic timezone. Automatic only:
+// always applies; an unsupported id keeps the last valid rules.
 bool applyAutoTimezoneFromIana(const char* iana);
 // Phase 2B: last automatic IANA resolution (set by applyAutoTimezoneFromIana
 // and read by the TIME ZONE settings page). autoTimezoneIana() is "" until

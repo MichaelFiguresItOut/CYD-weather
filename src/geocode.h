@@ -10,12 +10,10 @@
 //                       settings flow runs them in sequence (Open-Meteo
 //                       first, Nominatim on a definite no-match) and shows
 //                       which service is querying.
-//    geocodeReverse() — reverse: coordinates -> human-readable location
 //
 //  Services (all free, no API key, HTTPS):
 //    Open-Meteo Geocoding API   primary forward lookup
 //    Nominatim (OpenStreetMap)  fallback when Open-Meteo has no match
-//    BigDataCloud (keyless)     reverse geocoding (Open-Meteo has none)
 //
 //  Every function is blocking with bounded timeouts (same 5 s connect /
 //  10 s handshake as the weather clients) and is intended to be called
@@ -42,9 +40,3 @@ struct GeoResult {
 // the settings flow can draw a status line between the two.
 int geocodePostalOpenMeteo(const char* query, GeoResult* results, int maxResults);
 int geocodePostalNominatim(const char* query, GeoResult* results, int maxResults);
-
-// Resolve coordinates into a readable location. Returns true on success
-// (`out` is filled; `postcode` may be empty) or false on network/parse
-// failure or when no readable place comes back — the caller then keeps
-// the coordinates as-is.
-bool geocodeReverse(float lat, float lon, GeoResult* out);

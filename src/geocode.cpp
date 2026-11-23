@@ -32,7 +32,6 @@
 
 static const char* GEO_HOST_OPENMETEO  = "geocoding-api.open-meteo.com";
 static const char* GEO_HOST_NOMINATIM  = "nominatim.openstreetmap.org";
-static const char* GEO_HOST_BIGDATACLOUD = "api.bigdatacloud.net";
 
 static const uint16_t      GEO_HTTP_TIMEOUT_MS = 5000;   // TCP connect / socket read
 static const unsigned long GEO_HTTP_HANDSHAKE_S = 10;    // TLS handshake
@@ -213,35 +212,4 @@ int geocodePostalNominatim(const char* query, GeoResult* results, int maxResults
   if (!query || !*query || !results || maxResults < 1) return 0;
   if (!wifiEnsureConnected()) return -1;
   return searchNominatim(query, results, maxResults);
-}
-
-// ---- Reverse: BigDataCloud keyless reverse-geocode client ------------------
-bool geocodeReverse(float lat, float lon, GeoResult* out) {
-  if (!out || !wifiEnsureConnected()) return false;
-
-  String path = String("/data/reverse-geocode-client?latitude=") + String(lat, 4)
-              + "&longitude=" + String(lon, 4) + "&localityLanguage=en";
-  String body;
-  if (!httpsGet(GEO_HOST_BIGDATACLOUD, path, body)) return false;
-
-  JsonDocument doc;
-  if (ArduinoJson::deserializeJson(doc, body)) return false;
-
-  const char* city = doc["city"].as<const char*>();
-  const char* locality = doc["locality"].as<const char*>();
-  const char* country = doc["countryName"].as<const char*>();
-  const char* name = (city && city[0]) ? city
-                   : (locality && locality[0]) ? locality : country;
-  if (!name || !*name) {
-    Serial.println("[GEO] reverse: no readable place");
-    return false;
-  }
-  out->lat = lat;
-  out->lon = lon;
-  fillPlace(out, name, doc["principalSubdivision"].as<const char*>(), country,
-            doc["countryCode"].as<const char*>());
-  const char* pc = doc["postcode"].as<const char*>();
-  if (pc && *pc) snprintf(out->postcode, sizeof(out->postcode), "%.11s", pc);
-  Serial.printf("[GEO] reverse: %s\n", out->place);
-  return true;
 }

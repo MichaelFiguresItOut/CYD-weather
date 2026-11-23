@@ -15,8 +15,8 @@ material split out of this file.
 This file is the shared reference for future work: read it first in any new thread on this project.
 ## Files
 - `src/main.cpp` — app shell: `setup()`/`loop()`, boot sequence, refresh cadence
-- `src/config.{h,cpp}` — centralized configuration: `UserSettings` (all user-adjustable settings + site defaults), app timing/NTP constants, NVS persistence for every setting (`loadSettings()` + per-setting `save*()`), automatic/manual/unconfigured modes for location and timezone; see the Configuration section
-- firmware modules: `src/display.{h,cpp}` (TFT init), `src/wifi_conn.{h,cpp}` (WiFi credential seam + connect/auto-reconnect + scan), `src/weather.{h,cpp}` (fetch/parse, SD card + dog image), `src/render.{h,cpp}` (themes + per-second partial updates), `src/picker.{h,cpp}` (theme picker + swipe animation), `src/touch.{h,cpp}` (touch zones + gestures), `src/settings.{h,cpp}` (Settings app; see "Settings app (touchscreen)"), `src/keyboard.{h,cpp}` (blocking QWERTY + numeric keypad modals), `src/geocode.{h,cpp}` (location lookup (postal code / city) + reverse geocoding for the LOCATION page), `src/time_util.{h,cpp}` (NTP + timezone), `src/metar.{h,cpp}` / `src/rain_timeline.{h,cpp}` (rain analysis), `src/nws_station.{h,cpp}` (NWS station discovery + latest observations + automatic backup/fallback logic for the STATIONS page), `src/theme_ids.h` (theme indices)
+- `src/config.{h,cpp}` — centralized configuration: `UserSettings` (all user-adjustable settings + site defaults), app timing/NTP constants, NVS persistence for every setting (`loadSettings()` + per-setting `save*()`), automatic/manual/unconfigured modes for the location (the timezone is automatic only — it follows the location); see the Configuration section
+- firmware modules: `src/display.{h,cpp}` (TFT init), `src/wifi_conn.{h,cpp}` (WiFi credential seam + connect/auto-reconnect + scan), `src/weather.{h,cpp}` (fetch/parse, SD card + dog image), `src/render.{h,cpp}` (themes + per-second partial updates), `src/picker.{h,cpp}` (theme picker + swipe animation), `src/touch.{h,cpp}` (touch zones + gestures), `src/settings.{h,cpp}` (Settings app; see "Settings app (touchscreen)"), `src/keyboard.{h,cpp}` (blocking QWERTY modal), `src/geocode.{h,cpp}` (location lookup (postal code / city) for the LOCATION page), `src/time_util.{h,cpp}` (NTP + timezone), `src/metar.{h,cpp}` / `src/rain_timeline.{h,cpp}` (rain analysis), `src/nws_station.{h,cpp}` (NWS station discovery + latest observations + automatic backup/fallback logic for the STATIONS page), `src/theme_ids.h` (theme indices)
 - `src/nunito_bff.h` — generated Nunito BFF font blobs (masters em9/10/12/13/20/48) shared by themes 1 (SKY), 2 (SPLIT) and 3 (BENTO); regenerate with `tools/make_nunito_bff.py`, verify with `tools/check_bff_space.py`
 - `src/dog_image.{h,cpp}` — SD-card PNG decoder; keeps palette indices (+PLTE/tRNS) for palette images, natural RGB565 + alpha for the rest, composites per row at draw time (see Dog outfit images section)
 - `lib/puff/` — vendored Mark Adler `puff.c/h` (public-domain minimal DEFLATE inflater; the core's zlib is not linked into the app)
@@ -387,8 +387,7 @@ instance (`userSettings`), initialized with the defaults in `config.cpp`:
 | `locationMode` | `SettingMode` for lat/lon: UNCONFIGURED / AUTOMATIC / MANUAL | MANUAL (existing installs keep their built-for-site values) | yes (`locMode` u8) |
 | `postalCode` | postal code or city entered on the LOCATION page (US ZIP, ZIP+4, international code, or city name) | `""` | yes (`postcode` str) |
 | `placeName` | resolved location display ("City, Region, CountryCode") from geocoding | `""` | yes (`placename` str) |
-| `timezone` | `TimezoneRules`: std/DST offsets + DST transition (month, nth Sunday, wall-clock hour) | US Eastern (UTC-5/UTC-4, 2nd Sun Mar → 1st Sun Nov) | yes (`tzName` str, `tzStd`/`tzDst` i32, `tzDstS_M/W/H` + `tzDstE_M/W/H` u8) |
-| `timezoneMode` | `SettingMode` for the timezone (independent of `locationMode`) | AUTOMATIC (fresh install — the first fetch resolves the built-for-site zone; existing installs migrate, see below) | yes (`tzMode` u8) |
+| `timezone` | `TimezoneRules`: std/DST offsets + DST transition (month, nth Sunday, wall-clock hour). **Automatic only** — resolved from the active location on every weather fetch; the stored value is the last auto-resolved rules (a cache for boots before the first fetch) | US Eastern (UTC-5/UTC-4, 2nd Sun Mar → 1st Sun Nov), until the first fetch resolves the site zone | yes (`tzName` str, `tzStd`/`tzDst` i32, `tzDstS_M/W/H` + `tzDstE_M/W/H` u8) |
 | `theme` | selected theme index (0–3) | BASIC (0), restored from NVS at boot | yes (`theme` u32) |
 | `useCelsius` | temperature display unit (F/C) | F | yes (`celsius` u8) |
 | `use24Hour` | clock format (12h/24h) | US 12-hour | yes (`clock24` u8) |
@@ -418,38 +417,38 @@ instance (`userSettings`), initialized with the defaults in `config.cpp`:
   never clobbered by another, and nothing is written continuously. If the NVS
   namespace fails to open, all settings stay at their defaults and the saves
   no-op.
-- **Automatic vs manual** (location and timezone independently): mode
-  UNCONFIGURED = no mode chosen yet; first successful auto-detection fills in
-  the value and leaves the mode AUTOMATIC. AUTOMATIC = firmware-determined,
-  refreshable whenever Wi-Fi is available. MANUAL = user-chosen, and automatic
-  detection never overwrites it: `applyAutoLocation()` / `applyAutoTimezone()`
-  are the seam the future geolocation/timezone services call, and they return
-  `false` without touching the value when the mode is MANUAL (or the value is
-  invalid). `locationAutoAllowed()` / `timezoneAutoAllowed()` gate the
-  refresh behavior. The detection services and the settings UI that lets the
-  user choose modes are not implemented yet.
+- **Automatic vs manual** (location only): mode UNCONFIGURED = no mode
+  chosen yet; first successful auto-detection fills in the value and leaves
+  the mode AUTOMATIC. AUTOMATIC = firmware-determined, refreshable whenever
+  Wi-Fi is available. MANUAL = user-chosen, and automatic detection never
+  overwrites it: `applyAutoLocation()` is the seam the future geolocation
+  service calls, and it returns `false` without touching the value when the
+  mode is MANUAL (or the value is invalid). `locationAutoAllowed()` gates the
+  refresh behavior. The detection service and the settings UI that lets the
+  user choose modes are not implemented yet. The timezone has no mode of its
+  own: it is automatic only, and `applyAutoTimezone()` always applies a valid
+  rule set (it is called only by the weather fetch).
 - **Existing-install migration**: an install that predates this persistence
-  has no `locMode`/`tzMode` keys. Location loads as MANUAL with the site
-  default (the value it was always running with), so a working install keeps
-  its location and is never handed to automatic detection. The timezone is
-  the one exception (Phase 2B): a pre-Phase-2B install with a saved zone pick
-  loads as MANUAL (nothing ever changed it, so the displayed time is
-  unchanged); one with no saved zone loads as AUTOMATIC and the first weather
-  fetch re-resolves the same built-for-site zone from the same coordinates —
-  the displayed time is unchanged either way. The legacy 5-theme numbering
-  migration (`themeVer` < 2 → remap + write 2) is unchanged and still guarded
-  by `themeVer=2` on every save.
+  has no `locMode` key. Location loads as MANUAL with the site default (the
+  value it was always running with), so a working install keeps its location
+  and is never handed to automatic detection. The timezone (automatic only)
+  has no mode to migrate: the stored rules load as-is as the last
+  auto-resolved cache, and the first weather fetch replaces them with the
+  zone of the active location — a manual pick stored by older firmware is
+  simply superseded by the first fetch, and a fresh install keeps the
+  built-for-site default until then. The legacy `tzMode` key is erased on
+  load. The legacy 5-theme numbering migration (`themeVer` < 2 → remap +
+  write 2) is unchanged and still guarded by `themeVer=2` on every save.
 
 ## Settings app (touchscreen)
 Full-screen modal UI (`src/settings.{h,cpp}`), entered from the **SETTINGS** button (top-right corner) of the THEME picker; `< BACK` walks one level back at a time, the main page's `< BACK` returns to the picker and repaints the dashboard. While active, `touch.cpp` routes every touch to the settings app (`settingsTouch()`) and `main.cpp` suppresses dashboard redraws. Every change is written to NVS (`cydwx`) immediately — there is no Apply step (spec requirement).
 
-Main page: five section tiles.
+Main page: four section tiles.
 
 | Section | Rows | Behavior |
 |---|---|---|
 | APPEARANCE | THEME, TEMPERATURE, CLOCK, DATE | all four rows tap-to-cycle (theme cycles the 4 themes; the others toggle) |
-| LOCATION | CURRENT LOCATION (display only — "City, Region, CC" plus the postal code when known), ADD LOCATION, LATITUDE, LONGITUDE | ADD LOCATION opens the QWERTY keyboard ("POSTAL CODE OR CITY") — accepts a postal code (US ZIP, ZIP+4, international) or a city name ("NEW YORK, NY", "WELLINGTON, NZ"; letters and the comma come from the keyboard's 123 page); the entered text is uppercased, trimmed, saved immediately, then geocoded via the Open-Meteo Geocoding API with a single Nominatim/OSM fallback request per action for codes or city+state phrases Open-Meteo doesn't index (identifying User-Agent, 1 req/s limit respected); the ADD LOCATION page stays up for the whole lookup (shows `LOOKING UP ON OPEN-METEO...`, then `FALLING BACK TO NOMINATIM...` when Open-Meteo has no match), then lists up to 20 matches on the same screen — one "City, Region, CC" row per place (no coordinates — not useful for choosing), 5 per page with the same `<` / `>` header arrows and `PAGE n/N` footer as the TIME ZONE list when the results fill more than one page — and tapping one applies it: coordinates saved, `locationMode` → MANUAL, resolved name stored (CURRENT LOCATION row), then the NWS station list is updated automatically on the same page before returning to LOCATION (Phase 6 — status lines and outcome messages in the STATIONS section below), and the weather is refetched with the new station chain; 0 matches or a network failure keeps the entered text and shows `NO MATCH FOR <entry>` / `LOOKUP FAILED - RETRY` on the same page (the header's `< BACK` returns to LOCATION) without touching the coordinates. LATITUDE/LONGITUDE → blocking numeric keypad (range-checked, −90..90 / −180..180; `< BACK` discards, original kept); the keypad opens with the `|` cursor under the digit the finger tapped on the row (tapping the field moves it), digits insert at the cursor, BAK backspaces left of it and DEL deletes right of it — so a coordinate can be fixed in place; on confirming a valid pair: coordinates saved, `locationMode` → MANUAL, a keyless reverse geocode (BigDataCloud) updates CURRENT LOCATION (and the ADD LOCATION row when the service returns a postal code — a failed reverse lookup leaves the name unset but the coordinates stay in use), weather refetched |
-| TIME ZONE | TIME ZONE, DAYLIGHT SAVING | TIME ZONE opens the paginated list (18 zones, 5 per page, `<` / `>` header arrows, `PAGE n/N` footer; opens on the page holding the current zone — rules that match no catalog entry, e.g. a catalog zone with DST toggled off, open page 1 with no row highlighted); the page footer shows how the zone was chosen — `MANUAL - TAP TO CHANGE`, `AUTO - TAP TO CHANGE`, or `AUTO - UNSUPPORTED ZONE` when the automatic IANA id has no catalog mapping (the id itself goes to the serial log, the last valid rules keep running); DAYLIGHT SAVING toggles DST (on = +1 h during the DST window; off = `dstOffsetSec == stdOffsetSec`, window ignored) |
+| LOCATION | CURRENT LOCATION (display only — "City, Region, CC" plus the postal code when known), LATITUDE / LONGITUDE / TIME ZONE (plain-text info rows above the button), ADD LOCATION, red CLEAR / RESET button | ADD LOCATION opens the QWERTY keyboard ("POSTAL CODE OR CITY") — accepts a postal code (US ZIP, ZIP+4, international) or a city name ("NEW YORK, NY", "WELLINGTON, NZ"; letters and the comma come from the keyboard's 123 page); the entered text is uppercased, trimmed, saved immediately, then geocoded via the Open-Meteo Geocoding API with a single Nominatim/OSM fallback request per action for codes or city+state phrases Open-Meteo doesn't index (identifying User-Agent, 1 req/s limit respected); the ADD LOCATION page stays up for the whole lookup (shows `LOOKING UP ON OPEN-METEO...`, then `FALLING BACK TO NOMINATIM...` when Open-Meteo has no match), then lists up to 20 matches on the same screen — one "City, Region, CC" row per place (no coordinates — not useful for choosing), 5 per page with `<` / `>` header arrows and a `PAGE n/N` footer when the results fill more than one page — and tapping one applies it: coordinates saved, `locationMode` → MANUAL, resolved name stored (CURRENT LOCATION row), then the NWS station list is updated automatically on the same page before returning to LOCATION (Phase 6 — status lines and outcome messages in the STATIONS section below), and the weather is refetched with the new station chain; 0 matches or a network failure keeps the entered text and shows `NO MATCH FOR <entry>` / `LOOKUP FAILED - RETRY` on the same page (the header's `< BACK` returns to LOCATION) without touching the coordinates. There is no coordinate entry — LATITUDE / LONGITUDE / TIME ZONE are display only: the location is changed via ADD LOCATION (postal code or city name), and the timezone is automatic (no manual selection, no DST toggle) — it follows the location and is resolved on every weather fetch (IANA id from Open-Meteo → catalog zone, `IANA_MAP` in `src/timezones.h`); the TIME ZONE row shows the resolved zone name and the footer shows the IANA id (`IANA: <id>`; `IANA: - (SET ON FIRST WEATHER UPDATE)` before the first successful fetch, `(UNSUPPORTED)` appended when the id has no catalog mapping — the last valid rules keep running). The red CLEAR / RESET button at the bottom clears the saved location (confirmation page, back keeps it) |
 | WI-FI | CURRENT NETWORK (status), SCAN NETWORKS (scan/join), ADD NETWORK (manual entry), WIFI ON/OFF (power), RESTORE SAVED NETWORK (build-time network) | see below |
 | STATIONS | data source (info), preferred station (info), automatic backups (info), SCAN FOR LOCAL WEATHER STATION | NWS observation-station discovery + automatic fallback list — see below |
 
@@ -459,7 +458,7 @@ Main page: five section tiles.
   **SCAN NETWORKS** button (row 1). **Entering the page never scans**; a
   scan runs only when the user presses SCAN NETWORKS (first time) or the
   RESCAN row. The SCAN page lists up to 40 results, **4 per page, strongest first**,
-  with `<` / `>` arrows in the header (Time-Zone-page style; the top-right
+  with `<` / `>` arrows in the header (the top-right
   corner belongs to the arrows) and **RESCAN as the 5th row — shown even
   when the list is empty or the scan found nothing, so the page is never a
   dead end**; the footer shows `PAGE n/N`. Tapping a network joins it: WPA
@@ -491,24 +490,21 @@ Main page: five section tiles.
   reconnects nor runs its periodic weather fetch — both are multi-second
   blocking operations and would swallow touch events (the board feels
   frozen); reconnecting resumes automatically once the user leaves Settings.
-- **Keyboards** (`src/keyboard.{h,cpp}`, blocking modals): same header chrome
+- **Keyboard** (`src/keyboard.{h,cpp}`, blocking modal): same header chrome
   as the settings pages — `[ < BACK ]  TITLE  [ ENTER ]`, with `< BACK` in the
   same top-left corner everywhere. ENTER commits, `< BACK` discards; the
   entry lives in a draft buffer until commit, so the caller's value is only
   replaced on KEY_OK. The header pills are hit-tested manually in the key
   poll (they are drawn text, not widgets). No inactivity timeout — the
-  keyboard waits until the user chooses. The keypad validates its range and
-  shows the error in the hint line instead of committing. The numeric keypad
-  shows a static `|` cursor (no blink): tapping the field moves it
-  (the settings row tap pre-places it on the tapped digit), digits and `-`
-  insert at the cursor, the BAK key (backspace) removes the character to
-  its left and the DEL key removes the character to its right.
-  QWERTY (passwords, manual SSIDs) uses the same `|` cursor: tapping the
-  field moves it, keys insert at it, BAK/DEL delete left/right of it; long
+  keyboard waits until the user chooses.
+  QWERTY (passwords, manual SSIDs, location entry) shows a static `|` cursor
+  (no blink): tapping the field moves it, keys insert at it, the BAK key
+  (backspace) removes the character to its left and the DEL key removes the
+  character to its right; long
   entries (31-char SSIDs, 64-char passwords) scroll within the field to
   keep the cursor visible. Its bottom row is `123` (letter/symbol pages),
   SPACE and DEL; the shift toggle (`abc`/`ABC`) and BAK sit in the Z-row —
-  no duplicated labels in either layout.
+  no duplicated labels in the layout.
 - **STATIONS** (Phase 3/4/6/6.5, `src/nws_station.{h,cpp}`; US coverage only —
   footer: `NWS STATIONS (US ONLY) - TAP SCAN TO LOOK UP`): the info block
   shows `WEATHER DATA BY OPEN-METEO.COM`, then `PREFERRED STATION` and the
@@ -620,7 +616,7 @@ Main page: five section tiles.
 ## Build & flash
 - PlatformIO, board `esp32dev`, partition `huge_app.csv` (app > 1.25 MB),
   deps LovyanGFX ^1.1.0 + ArduinoJson ^7.0.0 + vendored `lib/puff`.
-- Build: `pio run` (~RAM 17%, Flash ~52%)
+- Build: `pio run` (~RAM 20%, Flash ~56%)
 
 ### Flash procedure — ALWAYS these two steps, same every time
 There is no shorter or longer variant; always do both, in this order:
@@ -640,9 +636,10 @@ log from t=0 (a plain port open does NOT reliably reset this board, verified
 - Boot also logs `[THEME] NVS: stored theme=.. ver=..` (what was read from NVS,
   ` (migrated)` if the legacy numbering migration ran) and `[THEME] active: NAME (n)`
   (the theme actually in use after migration/clamping). The NVS settings load
-  logs `[CFG] location: mode=.. lat=.. lon=..`, `[CFG] timezone: mode=.. NAME
-  (std ..s dst ..s)` and `[CFG] display: temp=.. clock=.. datefmt=..` (values
-  after NVS load; mode 0=unconfigured 1=automatic 2=manual).
+  logs `[CFG] location: mode=.. lat=.. lon=..`, `[CFG] timezone: NAME
+  (std ..s dst ..s)` (the last auto-resolved rules; no mode — the timezone is
+  automatic only) and `[CFG] display: temp=.. clock=.. datefmt=..` (values
+  after NVS load; location mode 0=unconfigured 1=automatic 2=manual).
 - Each refresh starts with `[WX] rssi=.. freeHeap=..`; each fetch logs
   `[WX] ... day=0|1|? rain=... next=...`.
 - NBM and METAR log their own `[NBM]` / `[METAR]` lines (freeHeap at request
@@ -788,18 +785,15 @@ Implemented (commit `d70913c`):
   entry are unsupported — Phase 2B later extended the map, so e.g.
   `America/Phoenix` now resolves to a dedicated Arizona entry).
 - The mapped zone is applied as the automatic timezone
-  (`applyAutoTimezoneFromIana` in `src/config.cpp`) whenever the mode allows
-  automatic (UNCONFIGURED or AUTOMATIC). MANUAL is never overwritten; an
-  unsupported id keeps the last valid rules.
-- Manual selection already sets `timezoneMode` to MANUAL and persists the
-  rules in NVS (settings app) — preserved unchanged.
-- Settings app: red CLEAR / RESET buttons on the LOCATION, TIME ZONE and WI-FI
-  pages with a confirmation page; the TIME ZONE reset returns the mode to
-  AUTOMATIC so the next weather update re-resolves it from the saved location.
+  (`applyAutoTimezoneFromIana` in `src/config.cpp`). The mode gating existed
+  here until the automatic-only change below; an unsupported id keeps the
+  last valid rules (still true).
+- Settings app: red CLEAR / RESET buttons on the LOCATION and WI-FI pages
+  with a confirmation page (the TIME ZONE page once had one too, until the
+  automatic-only change below).
 
 **Deliverable:** Changing the configured location updates the device's local
-time automatically on the next weather update, unless the user has explicitly
-selected a timezone.
+time automatically on the next weather update.
 
 ### Phase 2B — Timezone correctness and visibility (done)
 
@@ -811,11 +805,11 @@ Implemented (commit `3ca8635`):
 - Verified with `test/tz_verify.py` — a host-side mirror of the C++ catalog +
   `localOffsetSec()` DST math that hourly-sweeps 2024–2033 for all 18 catalog
   zones against Python `zoneinfo` (IANA tzdb): 1,581,120 samples, exact
-  match. Automatic and manual mode share the same `localOffsetSec()`, and the
-  clock stays NTP-UTC with the catalog offset applied at render time, so the
-  sweep covers the automatic, manual and NTP-sync cases in one pass (location
-  changes re-resolve via `applyAutoTimezoneFromIana` only while the mode
-  allows automatic — MANUAL is never overwritten, unchanged from Phase 2A).
+  match. All runtime paths share the same `localOffsetSec()`, and the clock
+  stays NTP-UTC with the catalog offset applied at render time, so the sweep
+  covers the automatic and NTP-sync cases in one pass (location changes
+  re-resolve via `applyAutoTimezoneFromIana` on the next fetch; see the
+  automatic-only change below).
 - Fixed what the sweep caught: `localOffsetSec()` now handles
   southern-hemisphere zones whose DST window crosses New Year (AU/NZ: start
   Sept/Oct, end April — the active window for year y is [start(y), end(y+1))
@@ -830,17 +824,47 @@ Implemented (commit `3ca8635`):
   gained these four zones plus same-rule cities (Dublin/Lisbon, CET capitals,
   Montreal, Canberra/Hobart).
 - Unsupported IANA ids are surfaced: the TIME ZONE page footer shows
-  `AUTO - UNSUPPORTED ZONE` when the automatic id has no catalog mapping
-  (the id itself goes to the serial log); the last valid rules keep running.
-- Timezone-mode migration: fresh installs default to AUTOMATIC (the first
-  fetch resolves the built-for-site zone); pre-Phase-2B installs load as
-  MANUAL when a zone was saved, AUTOMATIC otherwise — the displayed time is
-  unchanged either way (see Configuration).
-- `timezoneIndexByRules()` returns −1 for unknown rules (was: row 0), so a
-  catalog zone with DST toggled off no longer highlights the wrong row.
+  `AUTO - UNSUPPORTED ZONE - LAST KEPT` when the automatic id has no catalog
+  mapping (the id itself is shown on the page and in the serial log); the
+  last valid rules keep running.
+- Timezone-mode migration: fresh installs run the built-for-site default
+  (US Eastern) until the first fetch resolves the site zone; pre-Phase-2B
+  installs load their stored zone as-is as the last auto-resolved cache —
+  the displayed time is unchanged either way (see Configuration). The mode
+  itself was later retired entirely (automatic-only change below).
+- `timezoneIndexByRules()` returned −1 for unknown rules (was: row 0), so a
+  catalog zone with DST toggled off no longer highlighted the wrong row. The
+  function was removed with the manual selection UI.
 
 **Deliverable:** Timezone behavior verified end-to-end (location changes,
 DST, NTP), and the automatic mode's silent case is visible in the UI.
+
+### Automatic-only timezone — manual selection removed
+
+**Goal:** The timezone always follows the active location. No manual
+selection, no DST toggle, no reset — the IANA zone Open-Meteo reports for
+the location is the only source of truth.
+
+Implemented:
+
+- The TIME ZONE settings page is display-only: the resolved zone name and
+  the IANA id reported for the location, with an `AUTO - FOLLOWS LOCATION`
+  footer (or `AUTO - UNSUPPORTED ZONE - LAST KEPT` for an unmapped id). No
+  taps do anything, and the zone list / DAYLIGHT SAVING row / TIME ZONE
+  reset are gone.
+- `timezoneMode` is removed from `UserSettings` and `saveTimezone()` writes
+  rules only; `applyAutoTimezone()` always applies a valid rule set, and
+  `applyAutoTimezoneFromIana()` runs on every successful fetch with no mode
+  gate — so a location change (postal code, coordinate edit, CLEAR LOCATION)
+  re-resolves the zone on the next weather update.
+- NVS: the legacy `tzMode` key is erased on load and never written again;
+  a manual pick stored by older firmware loads as the last auto-resolved
+  cache and is superseded by the first fetch.
+- Consequence for Phase 7 (location profiles): switching profiles must
+  always re-resolve the timezone — there is no manual mode to preserve.
+
+**Deliverable:** The device's local time follows the active location
+automatically in every state; the user cannot (and need not) set it.
 
 (The same commit also reworks the LOCATION page's postal-code entry into the
 ADD LOCATION postal-code/city entry — see the Settings app section above.)
@@ -942,7 +966,7 @@ Pi implements:
   - Station priority order.
 - Add an interface to save, select, rename, and delete profiles.
 - Restore the selected profile's location and station preferences.
-- Recalculate automatic timezone when switching profiles.
-- Preserve a manually selected timezone according to the existing timezone mode behavior.
+- Recalculate the automatic timezone when switching profiles (the timezone
+  has no mode of its own — it always follows the location).
 
 **Deliverable:** Users can switch between saved locations without re-entering coordinates or configuring stations again.

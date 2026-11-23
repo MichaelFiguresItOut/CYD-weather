@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-//  Timezone catalog (Settings -> TIME ZONE -> zone list)
+//  Timezone catalog (automatic resolution, Phase 2A/2B)
 //
 //  TimezoneRules (config.h) is a small fixed-size struct — no Tz rules, no TZ
 //  strings: stdOffsetSec/dstOffsetSec in seconds (negative = west of UTC),
@@ -7,10 +7,12 @@
 //  (dstStartWeek/dstEndWeek 1..5, 5 = last Sunday), evaluated by
 //  localOffsetSec() in time_util.cpp.
 //
-//  Zones without DST (UTC, MSK, India, ...) set dstOffsetSec = stdOffsetSec
-//  so the DST window is a no-op. The list is kept compact (5 entries per
-//  Settings page) and only covers zones a travel use case is likely to
-//  need; keep every entry valid under validTimezone() (config.cpp).
+//  The timezone is automatic only: it always follows the active location
+//  (the IANA id Open-Meteo reports for the coordinates, mapped through
+//  IANA_MAP below). The catalog is the rule set an IANA id can resolve to;
+//  there is no manual selection. Zones without DST (UTC, MSK, India, ...)
+//  set dstOffsetSec = stdOffsetSec so the DST window is a no-op. Keep every
+//  entry valid under validTimezone() (config.cpp).
 //
 //  Every entry is a distinct real-world rule: no-DST zones are never
 //  approximated by a neighboring DST zone (Phoenix keeps plain MST, Honolulu
@@ -59,26 +61,6 @@ static const TimezoneEntry TIMEZONES[] = {
 };
 
 #define TIMEZONE_COUNT (sizeof(TIMEZONES) / sizeof(TIMEZONES[0]))
-
-// First entry matching r: by name, else by full rule values (offsets + DST
-// calendar). Matches by values so the factory default "US Eastern
-// (America/New_York)" highlights the "US Eastern" row. Returns -1 when the
-// rules match no catalog entry (e.g. a catalog zone with DST toggled off):
-// callers treat -1 as "no row selected".
-inline int timezoneIndexByRules(const TimezoneRules& r) {
-  for (size_t i = 0; i < TIMEZONE_COUNT; i++) {
-    const TimezoneRules& t = TIMEZONES[i].rules;
-    if (strcmp(r.name, t.name) == 0) return (int)i;
-    if (t.stdOffsetSec == r.stdOffsetSec && t.dstOffsetSec == r.dstOffsetSec &&
-        t.dstStartMonth == r.dstStartMonth && t.dstStartWeek == r.dstStartWeek &&
-        t.dstStartHourLocal == r.dstStartHourLocal &&
-        t.dstEndMonth == r.dstEndMonth && t.dstEndWeek == r.dstEndWeek &&
-        t.dstEndHourLocal == r.dstEndHourLocal) {
-      return (int)i;
-    }
-  }
-  return -1;
-}
 
 // Phase 2A (extended in Phase 2B): IANA identifiers (Open-Meteo
 // `timezone=auto` response) -> catalog entries. Only ids whose real-world

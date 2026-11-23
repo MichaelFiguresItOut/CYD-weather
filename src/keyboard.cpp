@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
 //  keyboard.cpp — modal blocking keyboards for the settings pages.
 //
-//  Both layouts share the SAME header as the settings pages (fixed geometry,
-//  320x240):
+//  The keyboard shares the SAME header as the settings pages (fixed
+//  geometry, 320x240):
 //
 //      +-----------------------------------------------+
 //      | [ < BACK ]          TITLE             [ ENTER ] |   y 0..26
@@ -11,8 +11,8 @@
 //      |  keys ...                                  |
 //      +-----------------------------------------------+
 //
-//  Semantics (both layouts):
-//      ENTER (top right) commits the buffer (keypad: after validation).
+//  Semantics:
+//      ENTER (top right) commits the buffer.
 //      < BACK (top left) DISCARDS it — the caller keeps the previous
 //      value, so a wrong entry never leaks into the settings.
 //  There is no inactivity timeout: the keyboard waits until the user
@@ -68,7 +68,7 @@ int keyCount = 0;
 
 // --- Shared touch handling -------------------------------------------------
 
-// Wait until every finger is up. Both keyboards are entered from a touch-DOWN
+// Wait until every finger is up. The keyboard is entered from a touch-DOWN
 // in the settings tap handler, so the opening tap is still on the glass:
 // without this drain it would register as the first key press.
 void waitTouchUp() {
@@ -78,7 +78,7 @@ void waitTouchUp() {
   }
 }
 
-// Where the last field tap landed (x), for keypad cursor placement.
+// Where the last field tap landed (x), for cursor placement.
 int fieldTapX = -1;
 
 // One blocking tap: waits for a press, tracks it, returns the pressed key
@@ -105,8 +105,7 @@ int pollTap() {
     if (x < 160) return KEY_BACK;
     if (x >= 260) return KEY_OK;
   }
-  // The field box (drawField: 8,34,304,24) — cursor placement in BOTH
-  // layouts (the numeric keypad and QWERTY).
+  // The field box (drawField: 8,34,304,24) — cursor placement (QWERTY).
   if (x >= 8 && x < 312 && y >= 34 && y < 58) {
     fieldTapX = x;
     return KEY_FIELDTAP;
@@ -266,9 +265,9 @@ int keyboardQwerty(const char* title, const char* label, char* buf, int bufSize)
   bool shift = true;
   bool digits = false;
   buildQwertyKeys(shift, digits);
-  // Same cursor model as the numeric keypad: a static "|" in the field,
-  // field taps move it (KEY_FIELDTAP), printable keys insert AT the cursor,
-  // BAK deletes the character LEFT of it, DEL the character RIGHT of it.
+  // The field shows a static "|" cursor; tapping the field moves it
+  // (KEY_FIELDTAP), printable keys insert AT the cursor, BAK deletes the
+  // character LEFT of it, DEL the character RIGHT of it.
   int cur = (int)strnlen(buf, bufSize);   // start at the end (buffers open empty)
   int scroll = 0;                          // px scrolled left, used for field taps
 
@@ -351,121 +350,6 @@ int keyboardQwerty(const char* title, const char* label, char* buf, int bufSize)
       }
     }
     if (changed) redraw();
-  }
-  return r;
-}
-
-// --- Numeric keypad (latitude / longitude) ----------------------------------
-
-// The field shows the buffer with a static "|" cursor. Tapping the field
-// moves the cursor to the tapped position (KEY_FIELDTAP); digits and "-"
-// insert AT the cursor. BAK (backspace) deletes the character to the LEFT
-// of the cursor, DEL deletes the character to the RIGHT — so a coordinate
-// can be edited in place instead of retyped from scratch.
-// initCursor is the starting index (the digit the finger tapped on the
-// settings row, see coordCursorAt()) or -1 for the end of the number.
-int keypadNumeric(const char* title, const char* hint, char* buf, int bufSize,
-                  int maxLen, float minV, float maxV, int initCursor) {
-  waitTouchUp();
-
-  keyCount = 0;
-  const int KX = 6, G = 6, G5 = 4;
-  const int CW = (320 - 2 * KX - 2 * G) / 3;      // 3 cols: 102
-  const int CW5 = (320 - 2 * KX - 4 * G5) / 5;    // 5 cols: 58 (bottom row)
-  const int R1Y = 72, R4Y = 180;   // rows 2-3 fall out of R1Y + row*(KEY_H+G)
-
-  for (int i = 0; i < 9; i++) {
-    int col = i % 3, row = i / 3;
-    char d = (char)('1' + i);
-    addCharKey(d, KX + col * (CW + G), R1Y + row * (KEY_H + G), CW, (int)d);
-  }
-  addWordKey("BAK", KX,               R4Y, CW5, KEY_BAK);  // backspace (left of cursor)
-  addWordKey("DEL", KX + (CW5 + G5),  R4Y, CW5, KEY_DEL);  // delete right of cursor
-  addCharKey('-',  KX + 2 * (CW5 + G5), R4Y, CW5, (int)'-');
-  addCharKey('0',  KX + 3 * (CW5 + G5), R4Y, CW5, (int)'0');
-  addCharKey('.',  KX + 4 * (CW5 + G5), R4Y, CW5, (int)'.');
-
-  int len0 = (int)strnlen(buf, bufSize);
-  int cur = (initCursor < 0) ? len0 : initCursor;
-  if (cur > len0) cur = len0;
-
-  char statusText[48];
-  snprintf(statusText, sizeof(statusText), "%s", hint);
-  bool err = false;
-
-  auto redraw = [&]() {
-    fillBackground();
-    drawHeader(title, "ENTER");
-    // Field text with the static "|" cursor (maxLen 12 -> fits the 300 px clip).
-    char disp[40];
-    int n = (int)strnlen(buf, bufSize);
-    if (cur > n) cur = n;
-    memcpy(disp, buf, cur);
-    disp[cur] = '|';
-    memcpy(disp + cur + 1, buf + cur, n - cur + 1);   // rest incl. NUL
-    drawField(disp, statusText, err);
-    for (int i = 0; i < keyCount; i++) drawKey(keys[i], nullptr);
-  };
-  redraw();
-
-  int r = KEY_OK;
-  while (true) {
-    int code = pollTap();
-    if (code < 0) continue;
-    if (code == KEY_BACK) { r = KEY_BACK; break; }   // discard: keep original
-    if (code == KEY_FIELDTAP) {
-      cur = textCharIndexAt(buf, 14, fieldTapX, 2.0f);   // 14 = field text inset
-      redraw();
-      continue;
-    }
-    if (code == KEY_OK) {
-      float v = strtof(buf, nullptr);
-      // A lone "-" parses as 0 — reject it explicitly.
-      if (buf[0] == 0 || (buf[0] == '-' && buf[1] == 0) || v < minV || v > maxV) {
-        snprintf(statusText, sizeof(statusText), "OUT OF RANGE");
-        err = true;
-        redraw();
-        continue;
-      }
-      break;   // ENTER: committed
-    }
-    size_t len = strnlen(buf, bufSize);
-    bool changed = false;
-    if (code == KEY_BAK) {            // backspace: character LEFT of the cursor
-      if (cur > 0) {
-        memmove(buf + cur - 1, buf + cur, len - cur + 1);
-        buf[len - 1] = 0;
-        cur--;
-        changed = true;
-      }
-    } else if (code == KEY_DEL) {     // delete: character RIGHT of the cursor
-      if (cur < (int)len) {
-        memmove(buf + cur, buf + cur + 1, len - cur);
-        buf[len - 1] = 0;
-        changed = true;
-      }
-    } else if (code == '-') {
-      // Only as the very first character (and never doubling an existing
-      // one); the result must still fit maxLen.
-      if (cur == 0 && (len == 0 || buf[0] != '-') && len < maxLen) {
-        memmove(buf + 1, buf, len + 1);   // shift rest incl. NUL
-        buf[0] = '-';
-        cur = 1;
-        changed = true;
-      }
-    } else if ((code >= '0' && code <= '9') || code == '.') {
-      if (code == '.' && strchr(buf, '.') != nullptr) continue;
-      if (len + 1 < bufSize && (int)len < maxLen) {
-        memmove(buf + cur + 1, buf + cur, len - cur + 1);
-        buf[cur] = (char)code;
-        cur++;
-        changed = true;
-      }
-    }
-    if (changed) {
-      err = false;
-      redraw();
-    }
   }
   return r;
 }

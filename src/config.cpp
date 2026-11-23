@@ -10,11 +10,11 @@
 //  lat/lon come from local_config.h (gitignored site configuration).
 //  Every setting is restored from NVS at boot (loadSettings()); the defaults
 //  above apply to anything never saved. The location defaults to MANUAL so
-//  the site the firmware was built for is never handed to auto-detection;
-//  the timezone defaults to AUTOMATIC (Phase 2B) so a fresh device resolves
-//  its zone from the same site location on the first weather fetch.
-//  loadTimezonePart() migrates existing installs (saved zone, never-saved
-//  mode) to MANUAL, preserving the previously hard-coded behavior.
+//  the site the firmware was built for is never handed to auto-detection.
+//  The timezone is automatic only (Phase 2A/2B): the first weather fetch
+//  resolves the zone for the active location; whatever the store holds
+//  until then is just the last-resolved cache (loadTimezonePart() also
+//  erases the legacy per-mode key left by older firmware).
 // ---------------------------------------------------------------------------
 UserSettings userSettings = {
   LOC_LAT,                  // site latitude (local_config.h)
@@ -22,8 +22,7 @@ UserSettings userSettings = {
   SettingMode::MANUAL,      // existing behavior: built-for-site values
   "",                       // postalCode: set on the LOCATION page; may be blank
   "",                       // placeName: resolved by geocoding; may be blank
-  TIMEZONE_US_EASTERN,      // US Eastern, US DST rules
-  SettingMode::AUTOMATIC,   // fresh install: first fetch resolves the zone from the site location
+  TIMEZONE_US_EASTERN,      // US Eastern, US DST rules (cache until first fetch)
   THEME_BASIC,              // default; loadSettings() overwrites with the persisted value
   false,                    // Fahrenheit
   false,                    // US 12-hour clock
@@ -44,8 +43,9 @@ UserSettings userSettings = {
 //   "lon"     f32   weather longitude
 //   "postcode" str  postal code or city entered on the LOCATION page ("" = none)
 //   "placename" str resolved location display name ("" = not resolved)
-//   "tzMode"  u8    SettingMode of the timezone
-//   "tzName"  str   timezone display name (informational)
+//   "tzMode"  u8    LEGACY (retired): per-mode key written by older
+//                  firmware; erased on load, never written again
+//   "tzName"  str   timezone display name (last auto-resolved zone)
 //   "tzStd"   i32   standard-time offset, seconds
 //   "tzDst"   i32   daylight-saving offset, seconds
 //   "tzDstS_M/W/H" u8  DST start: month / which Sunday / wall-clock hour
@@ -135,23 +135,17 @@ static void loadLocationPart() {
 }
 
 static void loadTimezonePart() {
-  // "tzMode" is written by every timezone save (manual pick, auto-resolve,
-  // settings-page reset), so a present key is authoritative. A missing key
-  // means a pre-Phase-2B install. Two cases:
-  //   * a zone pick is saved (the settings app writes "tzName" together with
-  //     the rule keys) -> the user chose it: keep MANUAL. Nothing else ever
-  //     changed, so the displayed time is unchanged.
-  //   * nothing is saved -> the device has always run the built-for-site
-  //     default: default to AUTOMATIC. The first weather fetch resolves the
-  //     zone from the same built-for-site coordinates, lands on the same
-  //     catalog zone, and the displayed time is unchanged as well.
-  if (prefs.isKey("tzMode")) {
-    userSettings.timezoneMode = loadMode("tzMode");
-  } else if (prefs.isKey("tzName") || prefs.isKey("tzStd")) {
-    userSettings.timezoneMode = SettingMode::MANUAL;
-  } else {
-    userSettings.timezoneMode = SettingMode::AUTOMATIC;
-  }
+  // Timezone (automatic only, Phase 2A/2B): the stored name + rules are the
+  // last auto-resolved zone for the active location - a cache so the clock
+  // is correct before the first weather fetch of a boot replaces them.
+  // Loaded as-is:
+  //   * a manual pick stored by older firmware becomes a stale cache; the
+  //     first fetch replaces it with the zone of the active location
+  //   * a fresh install keeps the built-for-site default (US Eastern) until
+  //     the first fetch resolves the zone for the site coordinates.
+  // The legacy per-mode key ("tzMode") is retired: its value is ignored and
+  // the key is erased so it does not linger in the store.
+  if (prefs.isKey("tzMode")) prefs.remove("tzMode");
   TimezoneRules tz = TIMEZONE_US_EASTERN;
   tz.stdOffsetSec      = prefs.getInt("tzStd", tz.stdOffsetSec);
   tz.dstOffsetSec      = prefs.getInt("tzDst", tz.dstOffsetSec);
@@ -172,8 +166,8 @@ static void loadTimezonePart() {
   }
   tz.name = tzNameBuf;
   userSettings.timezone = tz;
-  Serial.printf("[CFG] timezone: mode=%d %s (std %+ds dst %+ds)\n",
-                (int)userSettings.timezoneMode, tz.name, tz.stdOffsetSec, tz.dstOffsetSec);
+  Serial.printf("[CFG] timezone: %s (std %+ds dst %+ds)\n",
+                tz.name, tz.stdOffsetSec, tz.dstOffsetSec);
 }
 
 static void loadDisplayPart() {
@@ -273,10 +267,11 @@ void saveLocation() {
 }
 
 void saveTimezone() {
+  // Last auto-resolved rules for the active location (automatic only -
+  // there is no per-mode key to write).
   if (!nvsOpen) return;
   const TimezoneRules& t = userSettings.timezone;
-  size_t ok = prefs.putUChar("tzMode", (uint8_t)userSettings.timezoneMode);
-  if (ok) ok = prefs.putString("tzName", t.name ? t.name : "");
+  size_t ok = prefs.putString("tzName", t.name ? t.name : "");
   if (ok) ok = prefs.putInt("tzStd", t.stdOffsetSec);
   if (ok) ok = prefs.putInt("tzDst", t.dstOffsetSec);
   if (ok) ok = prefs.putUChar("tzDstS_M", (uint8_t)t.dstStartMonth);
@@ -300,15 +295,6 @@ void resetLocation() {
   userSettings.placeName[0]  = 0;
   userSettings.locationMode = SettingMode::UNCONFIGURED;
   saveLocation();
-}
-
-// Settings-page reset (TIME ZONE page confirmation): return the mode to
-// AUTOMATIC. The last valid rules are kept as-is - the next Open-Meteo
-// resolution (Phase 2A, inside fetchWeather) replaces them with the zone
-// for the saved location. The location keys are not touched.
-void resetTimezone() {
-  userSettings.timezoneMode = SettingMode::AUTOMATIC;
-  saveTimezone();
 }
 
 void saveDisplaySettings() {
@@ -340,14 +326,10 @@ void saveNwsStation() {
   if (!ok) Serial.println("[CFG] NWS station save failed");
 }
 
-// ---- Automatic-detection seam (future geolocation / timezone services) ----
+// ---- Automatic-detection seam (future geolocation service) ----
 bool locationAutoAllowed() {
   return userSettings.locationMode == SettingMode::UNCONFIGURED ||
          userSettings.locationMode == SettingMode::AUTOMATIC;
-}
-bool timezoneAutoAllowed() {
-  return userSettings.timezoneMode == SettingMode::UNCONFIGURED ||
-         userSettings.timezoneMode == SettingMode::AUTOMATIC;
 }
 
 bool applyAutoLocation(float lat, float lon) {
@@ -364,12 +346,10 @@ bool applyAutoLocation(float lat, float lon) {
 }
 
 bool applyAutoTimezone(const TimezoneRules& tz) {
-  if (!timezoneAutoAllowed()) return false;   // MANUAL is never overwritten
+  // Automatic only: this always takes effect (there is no mode to check).
   if (!validTimezone(tz)) return false;
-  bool changed = (userSettings.timezoneMode != SettingMode::AUTOMATIC) ||
-                 !tzEqual(userSettings.timezone, tz);
+  bool changed = !tzEqual(userSettings.timezone, tz);
   userSettings.timezone = tz;
-  userSettings.timezoneMode = SettingMode::AUTOMATIC;
   if (changed) saveTimezone();
   Serial.printf("[CFG] auto timezone applied: %s (std %+ds dst %+ds)\n",
                 tz.name ? tz.name : "?", tz.stdOffsetSec, tz.dstOffsetSec);
@@ -388,10 +368,10 @@ void autoTimezoneRecordIana(const char* iana, bool unsupported) {
 const char* autoTimezoneIana() { return autoIana; }
 bool autoTimezoneUnsupported() { return autoUnsupported; }
 
-// Phase 2A: the IANA id Open-Meteo reports for the saved coordinates
+// Phase 2A: the IANA id Open-Meteo reports for the active coordinates
 // (timezone=auto, e.g. "America/New_York"). Maps it to the catalog zone with
-// matching rules and applies it as the automatic timezone - a no-op under
-// MANUAL mode; an unsupported id leaves the last valid rules in place.
+// matching rules and applies it - automatic only, so this always takes
+// effect; an unsupported id leaves the last valid rules in place.
 bool applyAutoTimezoneFromIana(const char* iana) {
   int idx = timezoneIndexByIana(iana);
   autoTimezoneRecordIana(iana, idx < 0);
