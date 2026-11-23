@@ -6,9 +6,12 @@
 //    MAIN         – APPEARANCE / LOCATION / WI-FI / STATIONS
 //    APPEARANCE   – theme (cycles 4), °F/°C, 12/24 h, date format
 //    LOCATION     – current location (display), ADD LOCATION (QWERTY +
-//                   geocode lookup), latitude / longitude / time zone
-//                   (display only: the zone follows the location, resolved
-//                   on each weather fetch)
+//                   geocode lookup), SAVE LOCATIONS (Phase 7), latitude /
+//                   longitude / time zone (display only: the zone follows
+//                   the location, resolved on each weather fetch)
+//    SAVE LOC.    – Phase 7: save the current location + station
+//                   configuration as a named profile (up to 3), restore
+//                   one, clear one (with confirmation)
 //    POSTAL       – location lookup (postal code or city): searching
 //                   status (OPEN-METEO / NOMINATIM), then results (tap one
 //                   to apply) or a no-match / failure message
@@ -18,9 +21,9 @@
 //    STATIONS     – NWS station (Phase 3/4): preferred station + automatic
 //                   backup list, and the SCAN lookup (nearest stations
 //                   with distance + latest-observation freshness)
-//    CONFIRM      – CLEAR / RESET confirmation (LOCATION / WI-FI):
-//                   < BACK cancels, the red button performs the reset and
-//                   returns to the settings page
+//    CONFIRM      – CLEAR / RESET confirmation (LOCATION / WI-FI /
+//                   profile): < BACK cancels, the red button performs the
+//                   reset and returns to the settings page
 //
 //  "< BACK" on MAIN returns to the THEME picker (the picker's own "< BACK"
 //  then goes to the dashboard). All changes persist immediately via the
@@ -55,12 +58,13 @@
 #include "nws_station.h"
 #include "time_util.h"   // ntpIsSynced()
 #include "weather.h"
+#include "profile.h"
 
 namespace {
 
 enum Page { PAGE_MAIN, PAGE_APPEARANCE, PAGE_WEATHER, PAGE_WIFI,
             PAGE_SCAN, PAGE_POSTAL, PAGE_STATIONS,
-            PAGE_STN_SCAN, PAGE_CONFIRM };
+            PAGE_STN_SCAN, PAGE_CONFIRM, PAGE_SAVELOC };
 
 // --- Geometry (320x240) ------------------------------------------------
 constexpr int HDR_H      = 26;    // blue header bar
@@ -72,13 +76,23 @@ constexpr int ROW_Y0     = 34, ROW_H = 36, ROW_GAP = 3;        // up to 5 rows
 // Red CLEAR / RESET button (bottom of the LOCATION / WI-FI pages and the
 // confirmation page): full width, fixed height.
 constexpr int RESET_BTN_H  = 28;
-// LOCATION page: the plain-text info rows (lat/lon/timezone) sit between
-// the CURRENT LOCATION row and the ADD LOCATION button, which is drawn at
-// a fixed y (the standard 39 px row stride would collide with the red
-// reset button below).
-constexpr int LOC_INFO_Y0      = 76;   // first info row baseline
-constexpr int LOC_INFO_PITCH   = 19;   // info row spacing
-constexpr int LOC_ADD_Y        = 132;  // ADD LOCATION button top (ROW_H tall)
+// LOCATION page layout: CURRENT LOCATION (display row 0), the ADD
+// LOCATION + SAVE LOCATIONS buttons (Phase 7, fixed y — the standard
+// 39 px row stride would collide with the red reset button below), then
+// the plain-text info rows (lat/lon/timezone).
+constexpr int LOC_ADD_Y        = 72;   // ADD LOCATION button top
+constexpr int LOC_SAVE_Y       = 104;  // SAVE LOCATIONS button top (Phase 7)
+constexpr int LOC_BTN_H        = 30;   // height of both location buttons
+constexpr int LOC_INFO_Y0      = 140;  // first info row (LATITUDE)
+constexpr int LOC_INFO_PITCH   = 12;   // info row spacing
+
+// SAVE LOCATIONS page (Phase 7): SAVE CURRENT button + three 30 px
+// profile rows (RESTORE left 75 % / CLEAR right 25 %) + a result line.
+constexpr int SL_SAVE_Y   = 34;   // SAVE CURRENT button top
+constexpr int SL_BTN_H    = 30;   // button / row height
+constexpr int SL_ROW_Y0   = 72;   // first profile row top
+constexpr int SL_GAP      = 6;    // spacing between rows
+constexpr int SL_LEFT_W   = 234;  // RESTORE area (75 % of the 312 px row)
 // The WI-FI page uses compact rows (no footer) so the red reset button
 // fits at the bottom of the 240 px screen.
 constexpr int WIFI_ROW_Y0  = 66;
@@ -130,9 +144,13 @@ WifiScanItem nets[SCAN_LIST_MAX];
 bool scanning = false;
 char wifiMsg[48] = "";        // transient status ("JOINING...", "FAILED", ...)
 // What the confirmation page (PAGE_CONFIRM) is asking about: which section
-// the red CLEAR / RESET button would clear.
-enum ResetTarget { RT_NONE, RT_LOCATION, RT_WIFI };
+// the red CLEAR / RESET button would clear (RT_PROFILE: Phase 7, erase one
+// saved profile; profClearIdx names the slot).
+enum ResetTarget { RT_NONE, RT_LOCATION, RT_WIFI, RT_PROFILE };
 int  resetTarget = RT_NONE;
+int  profClearIdx = -1;        // profile slot the CLEAR confirmation is about
+char profMsg[48] = "";         // SAVE LOCATIONS page result line
+bool profMsgGood = false;      // result line color (true = neutral)
 GeoResult geoResults[GEO_LIST_MAX];  // location search results (all pages)
 int  geoCount = 0;
 int  geoPage = 0;                    // location results list page
@@ -155,6 +173,7 @@ NwsStation stn[STN_MAX];
 int  stnCount = 0;
 int  stnPage = 0;
 void drawStnScan();   // used by draw() before its definition below
+void drawSaveLoc();   // used by draw() before its definition below
 
 // LovyanGFX 1.3: textWidth() no longer takes a built-in font number —
 // measure with the text style (same pattern as the rest of the codebase).
@@ -365,8 +384,8 @@ int wifiRowAt(int16_t y) {
 // Top edge of the red CLEAR / RESET button on the current page (-1: none).
 int resetBtnY() {
   switch (page) {
-    case PAGE_WEATHER:   // LOCATION: ADD LOCATION button ends at 168
-      return 192;
+    case PAGE_WEATHER:   // LOCATION: the info rows end at 172 (Phase 7)
+      return 176;
     case PAGE_WIFI:      // compact rows end at 200 (no footer on this page)
       return 204;
     case PAGE_CONFIRM:
@@ -425,13 +444,27 @@ void drawWeather() {
   drawHeader("LOCATION", false);
   // Row 0: the resolved location as plain display text — deliberately
   // without the white button styling (see the WI-FI page's CURRENT
-  // NETWORK row); only the ADD LOCATION button below is tappable. Shows
-  // "City, Region, CC" plus the postal code when known; "--" when the
-  // location is not resolved yet.
+  // NETWORK row); only the ADD LOCATION / SAVE LOCATIONS buttons below
+  // are tappable. Shows "City, Region, CC" plus the postal code when
+  // known; "--" when the location is not resolved yet.
   tft.setTextDatum(TL_DATUM);
   tft.setTextSize(1);
   tft.setTextColor(colHint);
   tft.drawString("CURRENT LOCATION", ROW_X + 10, ROW_Y0 + 8);
+  // Phase 7: the active-profile marker (the current location is a saved
+  // profile): "* NAME" right-aligned on the label line.
+  {
+    const LocationProfile* act = profileGet(profileActive());
+    if (act) {
+      char mk[18];
+      snprintf(mk, sizeof(mk), "* %.12s", act->name);
+      tft.setTextDatum(TR_DATUM);
+      tft.setTextSize(1);
+      tft.setTextColor(colBtnBg);
+      tft.drawString(mk, 310, ROW_Y0 + 8);
+      tft.setTextDatum(TL_DATUM);
+    }
+  }
   char loc[128], locFit[72];   // 128 = worst-case name + " - " + entry
   if (userSettings.placeName[0])
     snprintf(loc, sizeof(loc), "%s%s%s", userSettings.placeName,
@@ -457,7 +490,10 @@ void drawWeather() {
   drawInfoRow(LOC_INFO_Y0 + LOC_INFO_PITCH, "LONGITUDE", lon);
   drawInfoRow(LOC_INFO_Y0 + 2 * LOC_INFO_PITCH, "TIME ZONE",
               userSettings.timezone.name);
-  drawListRow(1, "ADD LOCATION", pc, sGrid == 1, false, LOC_ADD_Y);
+  drawListRow(1, "ADD LOCATION", pc, sGrid == 1, false, LOC_ADD_Y, LOC_BTN_H);
+  char sv[12];
+  snprintf(sv, sizeof(sv), "%d SAVED", profileCount());
+  drawListRow(1, "SAVE LOCATIONS", sv, sGrid == 2, false, LOC_SAVE_Y, LOC_BTN_H);
   char iana[48];
   const char* id = autoTimezoneIana();
   if (id[0])
@@ -467,6 +503,68 @@ void drawWeather() {
     snprintf(iana, sizeof(iana), "IANA: - (SET ON FIRST WEATHER UPDATE)");
   drawResetButton("CLEAR / RESET");
   drawFooter(iana);
+}
+
+// Phase 7 — SAVE LOCATIONS page (from the LOCATION page's SAVE LOCATIONS
+// button): SAVE CURRENT stores the current location + station
+// configuration under a name (up to 12 chars); each saved profile row has
+// a RESTORE button (left 75 %) and a red CLEAR button (right 25 %);
+// unused slots show EMPTY. The active profile (the one the current
+// location is associated with) is marked with the accent bar at the row's
+// left edge.
+void drawSaveLoc() {
+  tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
+  drawHeader("SAVE LOCATIONS", false);
+
+  drawListRow(0, "SAVE CURRENT", "CURRENT LOCATION", sGrid == 0, false,
+              SL_SAVE_Y, SL_BTN_H);
+
+  const int active = profileActive();
+  for (int i = 0; i < PROFILE_MAX; i++) {
+    const int y = SL_ROW_Y0 + i * (SL_BTN_H + SL_GAP);
+    const LocationProfile* p = profileGet(i);
+    if (!p) {
+      // Unused slot: a single dim row (no buttons).
+      tft.fillRoundRect(ROW_X, y, ROW_W, SL_BTN_H, 6, colRowBg);
+      tft.drawRoundRect(ROW_X, y, ROW_W, SL_BTN_H, 6, colRowBd);
+      tft.setTextDatum(MC_DATUM);
+      tft.setTextSize(1);
+      tft.setTextColor(colDim);
+      tft.drawString("EMPTY", ROW_X + ROW_W / 2, y + SL_BTN_H / 2 + 1);
+      continue;
+    }
+    // RESTORE: NAME (left 75 %)
+    char lab[24];
+    snprintf(lab, sizeof(lab), "RESTORE: %s", p->name);
+    tft.fillRoundRect(ROW_X, y, SL_LEFT_W, SL_BTN_H, 6,
+                      sGrid == 1 + i ? colRowSel : colRowBg);
+    tft.drawRoundRect(ROW_X, y, SL_LEFT_W, SL_BTN_H, 6, colRowBd);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextSize(1);
+    tft.setTextColor(colText);
+    tft.drawString(lab, ROW_X + SL_LEFT_W / 2, y + SL_BTN_H / 2 + 1);
+    // CLEAR (right 25 %)
+    tft.fillRoundRect(ROW_X + SL_LEFT_W, y, ROW_W - SL_LEFT_W, SL_BTN_H, 6,
+                      colDanger);
+    tft.drawRoundRect(ROW_X + SL_LEFT_W, y, ROW_W - SL_LEFT_W, SL_BTN_H, 6,
+                      colDangerBd);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextSize(1);
+    tft.setTextColor(C(0xFF, 0xFF, 0xFF));
+    tft.drawString("CLEAR", ROW_X + SL_LEFT_W + (ROW_W - SL_LEFT_W) / 2,
+                   y + SL_BTN_H / 2 + 1);
+    // Active-profile marker: the accent bar at the row's left edge.
+    if (active == i)
+      tft.fillRect(ROW_X - 3, y + 4, 3, SL_BTN_H - 8, colBtnBg);
+  }
+
+  if (profMsg[0]) {
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextSize(1);
+    tft.setTextColor(profMsgGood ? colBgTxt : colWarn);
+    tft.drawString(profMsg, ROW_X + 10, 184);
+  }
+  drawFooter("RESTORE APPLIES LOCATION + STATIONS");
 }
 
 // ADD LOCATION search results: one row per candidate place — the display
@@ -543,7 +641,8 @@ void drawWifi() {
 void drawConfirm() {
   tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
   const char* title =
-      (resetTarget == RT_LOCATION) ? "CLEAR LOCATION" : "RESET WI-FI";
+      (resetTarget == RT_LOCATION) ? "CLEAR LOCATION" :
+      (resetTarget == RT_PROFILE)  ? "CLEAR PROFILE" : "RESET WI-FI";
   drawHeader(title, false);
 
   const char* lines[5];
@@ -555,13 +654,25 @@ void drawConfirm() {
       lines[3] = "becomes UNCONFIGURED.";
       lines[4] = "Timezone is not changed.";
       break;
-    default:  // RT_WIFI
+    case RT_WIFI:
+    default:
       lines[0] = "ERASES THE SAVED WI-FI";
       lines[1] = "CREDENTIALS AND JOINS";
       lines[2] = "THE BUILT-IN DEFAULT";
       lines[3] = "NETWORK.";
       lines[4] = "Radio on/off unchanged.";
       break;
+    case RT_PROFILE: {
+      const LocationProfile* p = (profClearIdx >= 0) ? profileGet(profClearIdx) : nullptr;
+      static char nmLine[24];
+      snprintf(nmLine, sizeof(nmLine), "PROFILE: %s", p ? p->name : "?");
+      lines[0] = "ERASES THE SAVED";
+      lines[1] = nmLine;
+      lines[2] = "LOCATION + STATIONS.";
+      lines[3] = "THE CURRENT LOCATION";
+      lines[4] = "IS NOT CHANGED.";
+      break;
+    }
   }
   tft.setTextDatum(TL_DATUM);
   tft.setTextSize(2);
@@ -699,6 +810,7 @@ void draw() {
     case PAGE_POSTAL:     drawPostal();     break;
     case PAGE_STATIONS:   drawStations();   break;
     case PAGE_STN_SCAN:   drawStnScan();    break;
+    case PAGE_SAVELOC:    drawSaveLoc();    break;
   }
 }
 
@@ -782,6 +894,9 @@ void stnPersistSelection(const NwsStation* pref, const NwsStation* backups,
   }
   Serial.printf("[STN] %s: %s (%s) %.1f km backups:%s\n", how, pref->id,
                 pref->name, (double)pref->distKm, bkl);
+  // Phase 7: keep the active saved profile's station configuration in sync
+  // (in place) so a later RESTORE returns to what the user last used.
+  profileSyncStations();
 }
 
 // Check the observations of the check set (one progress line per station
@@ -942,6 +1057,9 @@ void stnClearSelection() {
   for (int k = 0; k < NWS_BACKUP_MAX; k++)
     userSettings.nwsStationBackup[k][0] = 0;
   saveNwsStation();
+  // Phase 7: mirror the cleared station configuration into the active
+  // saved profile (a no-op when there is no active association).
+  profileSyncStations();
   page = PAGE_STATIONS;
   sGrid = 2;
   draw();
@@ -1410,6 +1528,10 @@ void applyLocation(int i) {
   snprintf(userSettings.placeName, sizeof(userSettings.placeName), "%s",
            g.place[0] ? g.place : g.name);
   saveLocation();
+  // Phase 7: a location change makes the saved-profile association stale —
+  // the new location is not one of the saved profiles (the profiles
+  // themselves are kept).
+  profileClearActive();
   Serial.printf("[GEO] applied: place=\"%s\" entry=\"%s\"\n",
                 userSettings.placeName, userSettings.postalCode);
   // Phase 6: station update BEFORE returning to the LOCATION page — it
@@ -1419,6 +1541,64 @@ void applyLocation(int i) {
   fetchWeather();
   page = PAGE_WEATHER;
   sGrid = 0;
+  draw();
+}
+
+// Phase 7 — SAVE CURRENT (SAVE LOCATIONS page): QWERTY entry of a profile
+// name (up to 12 chars, enforced by the keyboard's buffer limit). The
+// current location + station configuration is stored in the first empty
+// slot and becomes the active profile. The outcome is shown on the page's
+// result line (name required / duplicate / capacity / save failure).
+void saveCurrentProfile() {
+  profMsg[0] = 0;
+  if (userSettings.locationMode == SettingMode::UNCONFIGURED) {
+    snprintf(profMsg, sizeof(profMsg), "SET A LOCATION FIRST");
+    draw();
+    return;
+  }
+  char name[PROFILE_NAME_MAX + 1] = { 0 };
+  if (keyboardQwerty("SAVE CURRENT", "PROFILE NAME (UP TO 12 CHARS)", name,
+                     sizeof(name)) != KEY_OK) {
+    draw();               // < BACK: discarded
+    return;
+  }
+  // Trim surrounding spaces (the keyboard can insert them); keep the
+  // case as typed.
+  char* s = name;
+  while (*s == ' ') s++;
+  memmove(name, s, strlen(s) + 1);
+  size_t n = strlen(name);
+  while (n > 0 && name[n - 1] == ' ') name[--n] = 0;
+  if (n == 0) {
+    snprintf(profMsg, sizeof(profMsg), "NAME REQUIRED");
+  } else if (profileNameTaken(name)) {
+    snprintf(profMsg, sizeof(profMsg), "NAME IS ALREADY IN USE");
+  } else {
+    const int r = profileSaveCurrent(name);
+    if (r == 0) {
+      snprintf(profMsg, sizeof(profMsg), "SAVED: %s", name);
+      profMsgGood = true;
+    } else if (r == -2) {
+      snprintf(profMsg, sizeof(profMsg), "NO FREE SLOTS");
+    } else {
+      snprintf(profMsg, sizeof(profMsg), "SAVE FAILED - RETRY");
+    }
+  }
+  draw();
+}
+
+// Phase 7 — RESTORE row (SAVE LOCATIONS page): applies the saved
+// location + station configuration (no re-discovery) and immediately
+// refetches the weather; the automatic timezone is re-resolved from the
+// restored coordinates during that fetch.
+void restoreProfile(int i) {
+  if (!profileRestore(i)) {
+    draw();
+    return;
+  }
+  page = PAGE_WEATHER;
+  sGrid = 2;
+  fetchWeather();   // guarded internally when Wi-Fi is off
   draw();
 }
 
@@ -1455,10 +1635,13 @@ void handleTap(int16_t x, int16_t y) {
       case PAGE_STN_SCAN:   page = PAGE_STATIONS; sGrid = 2; draw(); break;
       case PAGE_SCAN:       page = PAGE_WIFI;  sGrid = 1; draw(); break;
       case PAGE_WIFI:       page = PAGE_MAIN;  sGrid = 2; draw(); break;
+      case PAGE_SAVELOC:    page = PAGE_WEATHER; sGrid = 2; draw(); break;
       case PAGE_CONFIRM: {   // BACK: nothing has been changed yet.
         int t = resetTarget;
         resetTarget = RT_NONE;
-        page = (t == RT_WIFI) ? PAGE_WIFI : PAGE_WEATHER;
+        profClearIdx = -1;
+        page = (t == RT_WIFI) ? PAGE_WIFI :
+               (t == RT_PROFILE) ? PAGE_SAVELOC : PAGE_WEATHER;
         sGrid = 0;
         draw();
         break;
@@ -1510,10 +1693,20 @@ void handleTap(int16_t x, int16_t y) {
         switch (resetTarget) {
           case RT_LOCATION:
             resetLocation();
+            // Phase 7: the location is gone — drop the saved-profile
+            // association (the profiles themselves are kept).
+            profileClearActive();
             page = PAGE_WEATHER; sGrid = 0;
             break;
           case RT_WIFI:
             doWifiReset();    // sets page + sGrid, draws itself
+            break;
+          case RT_PROFILE:    // Phase 7: erase the confirmed profile slot.
+            profileClear(profClearIdx);
+            profClearIdx = -1;
+            snprintf(profMsg, sizeof(profMsg), "PROFILE CLEARED");
+            profMsgGood = true;
+            page = PAGE_SAVELOC; sGrid = 0;
             break;
         }
         resetTarget = RT_NONE;
@@ -1564,11 +1757,17 @@ void handleTap(int16_t x, int16_t y) {
       draw();
       break;
     case PAGE_WEATHER:
-      // Only the ADD LOCATION button (top edge LOC_ADD_Y) acts; the
-      // location, coordinate and timezone lines are display-only.
-      if (y < LOC_ADD_Y || y >= LOC_ADD_Y + ROW_H) return;
-      sGrid = 1;
-      editLocation();
+      // The ADD LOCATION and SAVE LOCATIONS buttons act; the location,
+      // coordinate and timezone lines are display-only.
+      if (y >= LOC_ADD_Y && y < LOC_ADD_Y + LOC_BTN_H) {
+        sGrid = 1;
+        editLocation();
+      } else if (y >= LOC_SAVE_Y && y < LOC_SAVE_Y + LOC_BTN_H) {
+        profMsg[0] = 0;
+        page = PAGE_SAVELOC;
+        sGrid = 0;
+        draw();
+      }
       break;
     case PAGE_POSTAL:
       if (postalPhase != PP_RESULTS) return;   // searching / message: no rows
@@ -1633,6 +1832,30 @@ void handleTap(int16_t x, int16_t y) {
         if (idx < stnCount) stnSelect(idx);   // persist + back to STATIONS page
       }
       break;
+    case PAGE_SAVELOC:
+      if (y >= SL_SAVE_Y && y < SL_SAVE_Y + SL_BTN_H) {
+        sGrid = 0;
+        saveCurrentProfile();
+        break;
+      }
+      {
+        int row = -1;
+        for (int i = 0; i < PROFILE_MAX; i++) {
+          const int ry = SL_ROW_Y0 + i * (SL_BTN_H + SL_GAP);
+          if (y >= ry && y < ry + SL_BTN_H) { row = i; break; }
+        }
+        if (row < 0 || !profileGet(row)) break;   // EMPTY slot: no action
+        if (x < ROW_X + SL_LEFT_W) {              // RESTORE (left 75 %)
+          sGrid = 1 + row;
+          restoreProfile(row);
+        } else {                                   // CLEAR (right 25 %)
+          resetTarget = RT_PROFILE;
+          profClearIdx = row;
+          page = PAGE_CONFIRM;
+          draw();
+        }
+      }
+      break;
   }
 }
 
@@ -1651,6 +1874,9 @@ void settingsEnterFromPicker() {
   geoPage = 0;
   stnReset();
   resetTarget = RT_NONE;
+  profClearIdx = -1;
+  profMsg[0] = 0;
+  profMsgGood = false;
   wifiMsg[0] = 0;
   if (!prefs.getString("ssid", savedSsid, sizeof(savedSsid)))
     savedSsid[0] = 0;

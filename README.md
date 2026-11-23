@@ -448,7 +448,7 @@ Main page: four section tiles.
 | Section | Rows | Behavior |
 |---|---|---|
 | APPEARANCE | THEME, TEMPERATURE, CLOCK, DATE | all four rows tap-to-cycle (theme cycles the 4 themes; the others toggle) |
-| LOCATION | CURRENT LOCATION (display only — "City, Region, CC" plus the postal code when known), LATITUDE / LONGITUDE / TIME ZONE (plain-text info rows above the button), ADD LOCATION, red CLEAR / RESET button | ADD LOCATION opens the QWERTY keyboard ("POSTAL CODE OR CITY") — accepts a postal code (US ZIP, ZIP+4, international) or a city name ("NEW YORK, NY", "WELLINGTON, NZ"; letters and the comma come from the keyboard's 123 page); the entered text is uppercased, trimmed, saved immediately, then geocoded via the Open-Meteo Geocoding API with a single Nominatim/OSM fallback request per action for codes or city+state phrases Open-Meteo doesn't index (identifying User-Agent, 1 req/s limit respected); the ADD LOCATION page stays up for the whole lookup (shows `LOOKING UP ON OPEN-METEO...`, then `FALLING BACK TO NOMINATIM...` when Open-Meteo has no match), then lists up to 20 matches on the same screen — one "City, Region, CC" row per place (no coordinates — not useful for choosing), 5 per page with `<` / `>` header arrows and a `PAGE n/N` footer when the results fill more than one page — and tapping one applies it: coordinates saved, `locationMode` → MANUAL, resolved name stored (CURRENT LOCATION row), then the NWS station list is updated automatically on the same page before returning to LOCATION (Phase 6 — status lines and outcome messages in the STATIONS section below), and the weather is refetched with the new station chain; 0 matches or a network failure keeps the entered text and shows `NO MATCH FOR <entry>` / `LOOKUP FAILED - RETRY` on the same page (the header's `< BACK` returns to LOCATION) without touching the coordinates. There is no coordinate entry — LATITUDE / LONGITUDE / TIME ZONE are display only: the location is changed via ADD LOCATION (postal code or city name), and the timezone is automatic (no manual selection, no DST toggle) — it follows the location and is resolved on every weather fetch (IANA id from Open-Meteo → catalog zone, `IANA_MAP` in `src/timezones.h`); the TIME ZONE row shows the resolved zone name and the footer shows the IANA id (`IANA: <id>`; `IANA: - (SET ON FIRST WEATHER UPDATE)` before the first successful fetch, `(UNSUPPORTED)` appended when the id has no catalog mapping — the last valid rules keep running). The red CLEAR / RESET button at the bottom clears the saved location (confirmation page, back keeps it) |
+| LOCATION | CURRENT LOCATION (display only — "City, Region, CC" plus the postal code when known; a `* NAME` marker on the label line shows the active saved profile, Phase 7), LATITUDE / LONGITUDE / TIME ZONE (plain-text info rows), ADD LOCATION, SAVE LOCATIONS (Phase 7 — "n SAVED"), red CLEAR / RESET button | ADD LOCATION opens the QWERTY keyboard ("POSTAL CODE OR CITY") — accepts a postal code (US ZIP, ZIP+4, international) or a city name ("NEW YORK, NY", "WELLINGTON, NZ"; letters and the comma come from the keyboard's 123 page); the entered text is uppercased, trimmed, saved immediately, then geocoded via the Open-Meteo Geocoding API with a single Nominatim/OSM fallback request per action for codes or city+state phrases Open-Meteo doesn't index (identifying User-Agent, 1 req/s limit respected); the ADD LOCATION page stays up for the whole lookup (shows `LOOKING UP ON OPEN-METEO...`, then `FALLING BACK TO NOMINATIM...` when Open-Meteo has no match), then lists up to 20 matches on the same screen — one "City, Region, CC" row per place (no coordinates — not useful for choosing), 5 per page with `<` / `>` header arrows and a `PAGE n/N` footer when the results fill more than one page — and tapping one applies it: coordinates saved, `locationMode` → MANUAL, resolved name stored (CURRENT LOCATION row), the saved-profile association is dropped (Phase 7 — the new location is not a saved one), then the NWS station list is updated automatically on the same page before returning to LOCATION (Phase 6 — status lines and outcome messages in the STATIONS section below), and the weather is refetched with the new station chain; 0 matches or a network failure keeps the entered text and shows `NO MATCH FOR <entry>` / `LOOKUP FAILED - RETRY` on the same page (the header's `< BACK` returns to LOCATION) without touching the coordinates. SAVE LOCATIONS (Phase 7) opens the saved-profiles page — see the **Location profiles** bullet below. There is no coordinate entry — LATITUDE / LONGITUDE / TIME ZONE are display only: the location is changed via ADD LOCATION (postal code or city name), and the timezone is automatic (no manual selection, no DST toggle) — it follows the location and is resolved on every weather fetch (IANA id from Open-Meteo → catalog zone, `IANA_MAP` in `src/timezones.h`); the TIME ZONE row shows the resolved zone name and the footer shows the IANA id (`IANA: <id>`; `IANA: - (SET ON FIRST WEATHER UPDATE)` before the first successful fetch, `(UNSUPPORTED)` appended when the id has no catalog mapping — the last valid rules keep running). The red CLEAR / RESET button at the bottom clears the saved location (confirmation page, back keeps it); the association with any saved profile is dropped, the profiles themselves are kept |
 | WI-FI | CURRENT NETWORK (status), SCAN NETWORKS (scan/join), ADD NETWORK (manual entry), WIFI ON/OFF (power), RESTORE SAVED NETWORK (build-time network) | see below |
 | STATIONS | data source (info), preferred station (info), automatic backups (info), SCAN FOR LOCAL WEATHER STATION | NWS observation-station discovery + automatic fallback list — see below |
 
@@ -558,6 +558,37 @@ Main page: four section tiles.
   preferred → backups, then Open-Meteo (the main screen's data-age line
   shows which source supplied it — `NWS KLGA 24m - OM 15m`, see the
   dashboard table above).
+- **Location profiles** (Phase 7, `src/profile.{h,cpp}`; NVS namespace
+  `cydprof` — deliberately separate from `cydwx` so a corrupted or
+  interrupted profile save can never touch the main settings, and vice
+  versa): the LOCATION page's **SAVE LOCATIONS** button opens the profiles
+  page. **SAVE CURRENT** asks for a profile name on the QWERTY keyboard
+  (up to 12 characters, trimmed; names are unique case-insensitively) and
+  stores the current location (postal code as entered, resolved display
+  name, lat/lon) plus the full station configuration (preferred id/name/
+  distance/provider + the ordered automatic backups) into the first empty
+  slot — the new slot immediately becomes the **active** profile. Each of
+  the three slots shows as a row: `RESTORE: NAME` (left 75 %) + a red
+  `CLEAR` (right 25 %); unused slots show `EMPTY`; the active profile gets
+  an accent bar at the row's left edge (and the LOCATION page shows
+  `* NAME` on the CURRENT LOCATION line). **RESTORE** copies the slot's
+  location + station configuration back into the settings (no re-geocoding,
+  no station rediscovery), makes it active, and refetches the weather —
+  the automatic timezone re-resolves from the restored coordinates during
+  that fetch (the timezone is never stored in a profile). **CLEAR** asks
+  on the confirmation page (`ERASES THE SAVED PROFILE: NAME ... THE
+  CURRENT LOCATION IS NOT CHANGED.`) and then deletes the slot — clearing
+  the active profile drops the association. Association rules: SAVE and
+  RESTORE set the active profile; applying a new location (ADD LOCATION)
+  or the location reset drops it (the saved profiles are kept); a station
+  SCAN updates the active profile's station configuration in place (select
+  or clear). Storage: one `|`-separated 12-field blob per slot (`p0`..`p2`)
+  + the active index — on load a blob that does not parse exactly (an
+  interrupted save) is treated as an empty slot, and a loaded active index
+  whose stored location no longer matches the loaded location is dropped.
+  There is no in-place rename (the spec lists one — the practical
+  replacement is CLEAR + SAVE CURRENT with the new name), and no
+  per-profile timezone (spec: the timezone always follows the location).
 - **Phase 6 — automatic station update on a location change:** the SCAN
   button above is the manual refresh (with the step-by-step status messages
   and the `REFRESH` row on the results page). On top of that, confirming a
@@ -951,7 +982,7 @@ Pi implements:
 
 **Deliverable:** Both station-selection flows persist a preferred station plus up to 3 backups chosen by the distance/freshness ranking, and `test/nws/test_rank.py` pins the ranking rules (incl. the worked example from the spec).
 
-### Phase 7 — Multiple saved location profiles
+### Phase 7 — Multiple saved location profiles (done)
 
 **Goal:** Allow users to switch between frequently used locations.
 

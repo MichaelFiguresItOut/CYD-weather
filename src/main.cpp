@@ -37,6 +37,7 @@
 #include "settings.h"
 #include "touch.h"
 #include "time_util.h"
+#include "profile.h"
 
 void setup() {
   Serial.begin(115200);
@@ -51,6 +52,10 @@ void setup() {
   // Restore the persisted user settings (NVS "cydwx") before anything that
   // reads them: the first render, NTP offset, and weather fetch all follow.
   loadSettings();
+  // Phase 7: restore the saved location profiles (NVS "cydprof") before the
+  // first render / weather fetch — the active-profile association is part
+  // of the station-resolution context.
+  profileLoad();
   Serial.printf("[THEME] active: %s (%d)\n", themeName(userSettings.theme), userSettings.theme);
 
   // SD card + dog outfit image (implementation in weather.cpp).
