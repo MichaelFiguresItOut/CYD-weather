@@ -64,7 +64,7 @@ namespace {
 
 enum Page { PAGE_MAIN, PAGE_APPEARANCE, PAGE_WEATHER, PAGE_WIFI,
             PAGE_SCAN, PAGE_POSTAL, PAGE_STATIONS,
-            PAGE_STN_SCAN, PAGE_CONFIRM, PAGE_SAVELOC };
+            PAGE_STN_SCAN, PAGE_CONFIRM, PAGE_SAVELOC, PAGE_RESTORE };
 
 // --- Geometry (320x240) ------------------------------------------------
 constexpr int HDR_H      = 26;    // blue header bar
@@ -151,6 +151,14 @@ int  resetTarget = RT_NONE;
 int  profClearIdx = -1;        // profile slot the CLEAR confirmation is about
 char profMsg[48] = "";         // SAVE LOCATIONS page result line
 bool profMsgGood = false;      // result line color (true = neutral)
+// RESTORE page (transient, between SAVE LOCATIONS and LOCATION): the
+// centered status line while a tapped profile is applied + the weather
+// is refetched — same pattern as the ADD LOCATION status lines
+// (RST_SEARCHING = in progress, RST_MSG = terminal message).
+enum RstPhase { RST_SEARCHING, RST_MSG };
+RstPhase rstPhase = RST_MSG;
+char restoreMsg[48] = "";
+bool rstMsgGood = false;       // terminal line color (true = neutral)
 GeoResult geoResults[GEO_LIST_MAX];  // location search results (all pages)
 int  geoCount = 0;
 int  geoPage = 0;                    // location results list page
@@ -507,13 +515,15 @@ void drawWeather() {
 
 // Phase 7 — SAVE LOCATIONS page (from the LOCATION page's SAVE LOCATIONS
 // button): SAVE CURRENT stores the current location + station
-// configuration under a name (up to 12 chars); each saved profile row has
-// a RESTORE button (left 75 %) and a red CLEAR button (right 25 %);
-// unused slots show EMPTY. The active profile — the one whose stored
-// location equals the current location — is the row whose RESTORE side
-// is on the yellow accent background (the red CLEAR box is unchanged).
-// When all slots are used, SAVE CURRENT does not open the keyboard —
-// the page shows the large (size 2) result line instead.
+// configuration under a name (up to 12 chars); each saved profile row
+// shows the name + saved place (left 75 % — tap to restore) and a red
+// CLEAR button (right 25 %); unused slots show EMPTY (tapping an empty
+// slot acts like SAVE CURRENT — the current location is saved into it).
+// The active profile — the one whose stored location equals the current
+// location — is the row whose left side is on the yellow accent
+// background (the red CLEAR box is unchanged). When all slots are used,
+// SAVE CURRENT does not open the keyboard — the page shows the large
+// (size 2) result line instead.
 void drawSaveLoc() {
   tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
   drawHeader("SAVE LOCATIONS", false);
@@ -526,7 +536,8 @@ void drawSaveLoc() {
     const int y = SL_ROW_Y0 + i * (SL_BTN_H + SL_GAP);
     const LocationProfile* p = profileGet(i);
     if (!p) {
-      // Unused slot: a single dim row (no buttons).
+      // Unused slot: a single dim row — tapping it acts like
+      // SAVE CURRENT (the current location is saved into it).
       tft.fillRoundRect(ROW_X, y, ROW_W, SL_BTN_H, 6, colRowBg);
       tft.drawRoundRect(ROW_X, y, ROW_W, SL_BTN_H, 6, colRowBd);
       tft.setTextDatum(MC_DATUM);
@@ -535,20 +546,26 @@ void drawSaveLoc() {
       tft.drawString("EMPTY", ROW_X + ROW_W / 2, y + SL_BTN_H / 2 + 1);
       continue;
     }
-    // RESTORE: NAME (left 75 %): the active profile is the yellow accent
-    // row; the other rows are white (selection highlight when focused).
+    // NAME + saved place (left 75 %): the active profile is the yellow
+    // accent row; the other rows are white (selection highlight when
+    // focused).
     const bool isActive = (active == i);
     tft.fillRoundRect(ROW_X, y, SL_LEFT_W, SL_BTN_H, 6,
                       isActive ? colBtnBg
                                : (sGrid == 1 + i ? colRowSel : colRowBg));
     tft.drawRoundRect(ROW_X, y, SL_LEFT_W, SL_BTN_H, 6,
                       isActive ? colBtnBd : colRowBd);
-    char lab[24];
-    snprintf(lab, sizeof(lab), "RESTORE: %s", p->name);
+    // Two-line label: the user-defined name + the saved place
+    // ("City, Region, CC", trimmed to the row width; the postal code as
+    // fallback for a profile with no resolved place name).
+    char place[64];
+    truncText(p->placeName[0] ? p->placeName : p->postalCode, 1,
+              SL_LEFT_W - 12, place, sizeof(place));
     tft.setTextDatum(MC_DATUM);
     tft.setTextSize(1);
     tft.setTextColor(isActive ? colBtnTxt : colText);
-    tft.drawString(lab, ROW_X + SL_LEFT_W / 2, y + SL_BTN_H / 2 + 1);
+    tft.drawString(p->name, ROW_X + SL_LEFT_W / 2, y + SL_BTN_H / 2 - 6);
+    tft.drawString(place, ROW_X + SL_LEFT_W / 2, y + SL_BTN_H / 2 + 6);
     // CLEAR (right 25 %) — always a red box, on the active row too.
     tft.fillRoundRect(ROW_X + SL_LEFT_W, y, ROW_W - SL_LEFT_W, SL_BTN_H, 6,
                       colDanger);
@@ -584,6 +601,22 @@ void drawSaveLoc() {
     }
   }
   drawFooter("RESTORE APPLIES LOCATION + STATIONS");
+}
+
+// Phase 7 — RESTORE LOCATION page (transient, after tapping a saved
+// profile's row): centered status line for each step while the profile is
+// applied and the weather is refetched — the same pattern as the ADD
+// LOCATION status lines (searching = neutral color, terminal = warn
+// unless the outcome is good).
+void drawRestore() {
+  tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
+  drawHeader("RESTORE LOCATION", false);
+  tft.setTextDatum(MC_DATUM);
+  int msgSz = (txtW(restoreMsg, 2) <= 300) ? 2 : 1;
+  tft.setTextSize(msgSz);
+  tft.setTextColor(rstPhase == RST_SEARCHING || rstMsgGood ? colBgTxt : colWarn);
+  tft.drawString(restoreMsg, 160, 108);
+  drawFooter(rstPhase == RST_SEARCHING ? "" : "TAP < BACK TO GO BACK");
 }
 
 // ADD LOCATION search results: one row per candidate place — the display
@@ -830,6 +863,7 @@ void draw() {
     case PAGE_STATIONS:   drawStations();   break;
     case PAGE_STN_SCAN:   drawStnScan();    break;
     case PAGE_SAVELOC:    drawSaveLoc();    break;
+    case PAGE_RESTORE:    drawRestore();    break;
   }
 }
 
@@ -1614,18 +1648,59 @@ void saveCurrentProfile() {
   draw();
 }
 
-// Phase 7 — RESTORE row (SAVE LOCATIONS page): applies the saved
-// location + station configuration (no re-discovery) and immediately
-// refetches the weather; the automatic timezone is re-resolved from the
-// restored coordinates during that fetch.
+// Centered RESTORE status line: progress (RST_SEARCHING) or the final
+// outcome (RST_MSG, shown for 2 s so it is readable before the page leaves).
+void restoreStatus(const char* m, bool done, bool good) {
+  rstPhase = done ? RST_MSG : RST_SEARCHING;
+  rstMsgGood = good;
+  snprintf(restoreMsg, sizeof(restoreMsg), "%s", m);
+  draw();
+  delay(done ? 2000 : 50);
+}
+
+// Phase 7 — row tap on a saved profile (SAVE LOCATIONS page): applies
+// the saved location + station configuration (no re-geocoding, no station
+// rediscovery) and refetches the weather; the automatic timezone is
+// re-resolved from the restored coordinates during that fetch. The
+// transient RESTORE LOCATION page reports each step with a centered
+// status line (same pattern as the ADD LOCATION status lines) so the
+// screen never looks frozen while the settings load and the weather
+// fetch runs.
 void restoreProfile(int i) {
+  if (!profileGet(i)) { draw(); return; }
+  page = PAGE_RESTORE;
+  sGrid = 0;
+  restoreStatus("LOADING SAVED LOCATION...", false, false);
   if (!profileRestore(i)) {
+    restoreStatus("RESTORE FAILED - RETRY", true, false);
+    page = PAGE_SAVELOC; sGrid = 1 + i;
     draw();
     return;
   }
+  // Station configuration came straight from the profile — report it like
+  // the ADD LOCATION station-update outcome does.
+  if (userSettings.nwsStationId[0]) {
+    int nBk = 0;
+    for (int k = 0; k < NWS_BACKUP_MAX; k++)
+      if (userSettings.nwsStationBackup[k][0]) nBk++;
+    char m[40];
+    if (nBk > 0) snprintf(m, sizeof(m), "NWS: %s + %d BACKUPS",
+                          userSettings.nwsStationId, nBk);
+    else         snprintf(m, sizeof(m), "NWS: %s", userSettings.nwsStationId);
+    restoreStatus(m, false, false);
+  }
+  restoreStatus("FETCHING WEATHER...", false, false);
+  const bool ok = fetchWeather();   // guarded internally when Wi-Fi is off
+  const LocationProfile* p = profileGet(i);
+  if (ok && p) {
+    char m[40];
+    snprintf(m, sizeof(m), "RESTORED: %s", p->name);
+    restoreStatus(m, true, true);
+  } else {
+    restoreStatus("RESTORED - WEATHER FETCH FAILED", true, false);
+  }
   page = PAGE_WEATHER;
   sGrid = 2;
-  fetchWeather();   // guarded internally when Wi-Fi is off
   draw();
 }
 
@@ -1663,6 +1738,7 @@ void handleTap(int16_t x, int16_t y) {
       case PAGE_SCAN:       page = PAGE_WIFI;  sGrid = 1; draw(); break;
       case PAGE_WIFI:       page = PAGE_MAIN;  sGrid = 2; draw(); break;
       case PAGE_SAVELOC:    page = PAGE_WEATHER; sGrid = 2; draw(); break;
+      case PAGE_RESTORE:    page = PAGE_SAVELOC; sGrid = 0; draw(); break;
       case PAGE_CONFIRM: {   // BACK: nothing has been changed yet.
         int t = resetTarget;
         resetTarget = RT_NONE;
@@ -1871,8 +1947,11 @@ void handleTap(int16_t x, int16_t y) {
           const int ry = SL_ROW_Y0 + i * (SL_BTN_H + SL_GAP);
           if (y >= ry && y < ry + SL_BTN_H) { row = i; break; }
         }
-        if (row < 0 || !profileGet(row)) break;   // EMPTY slot: no action
-        if (x < ROW_X + SL_LEFT_W) {              // RESTORE (left 75 %)
+        if (row < 0) break;
+        if (!profileGet(row)) {                   // EMPTY slot: saving the
+          sGrid = 1 + row;                        // current location into it
+          saveCurrentProfile();                   // (the first empty slot)
+        } else if (x < ROW_X + SL_LEFT_W) {       // left 75 %: apply the profile
           sGrid = 1 + row;
           restoreProfile(row);
         } else {                                   // CLEAR (right 25 %)
@@ -1904,6 +1983,9 @@ void settingsEnterFromPicker() {
   profClearIdx = -1;
   profMsg[0] = 0;
   profMsgGood = false;
+  rstPhase = RST_MSG;
+  restoreMsg[0] = 0;
+  rstMsgGood = false;
   wifiMsg[0] = 0;
   if (!prefs.getString("ssid", savedSsid, sizeof(savedSsid)))
     savedSsid[0] = 0;

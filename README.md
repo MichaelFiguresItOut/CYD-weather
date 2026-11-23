@@ -570,14 +570,23 @@ Main page: four section tiles.
   slot — the new slot immediately becomes the **active** profile. When all
   three slots are used, SAVE CURRENT does not open the keyboard — the page
   shows `NO FREE SLOTS - CLEAR A SAVED LOCATION` in large (size 2, two
-  lines) warn-colored text. Each of the three slots shows as a row:
-  `RESTORE: NAME` (left 75 %) + a red `CLEAR` (right 25 %); unused slots
-  show `EMPTY`; the active profile's row is drawn on the yellow accent
-  background (the `RESTORE: NAME` side — the red `CLEAR` box is unchanged —
-  and the LOCATION page shows `* NAME` on the CURRENT LOCATION line). **RESTORE** copies the slot's
-  location + station configuration back into the settings (no re-geocoding,
-  no station rediscovery), makes it active, and refetches the weather —
-  the automatic timezone re-resolves from the restored coordinates during
+  lines) warn-colored text. Each of the three slots shows as a row: the
+  profile **name + saved place** (`City, Region, CC`) on the left 75 %
+  (tap to restore) + a red `CLEAR` (right 25 %); unused slots show
+  `EMPTY` — tapping an empty slot acts like SAVE CURRENT (the current
+  location is saved into that slot, which is the first empty one). The
+  active profile's row is drawn on the yellow accent background (the
+  name/place side — the red `CLEAR` box is unchanged — and the LOCATION
+  page shows `* NAME` on the CURRENT LOCATION line). Tapping a saved
+  profile's row opens a brief **RESTORE LOCATION** page that reports each
+  step with a centered status line (same pattern as ADD LOCATION):
+  `LOADING SAVED LOCATION...`, the saved station configuration (e.g.
+  `NWS: KLGA + 3 BACKUPS`), `FETCHING WEATHER...`, then the outcome — the
+  screen never looks frozen while the settings load and the weather is
+  fetched. **RESTORE** copies the slot's location + station
+  configuration back into the settings (no re-geocoding, no station
+  rediscovery), makes it active, and refetches the weather — the
+  automatic timezone re-resolves from the restored coordinates during
   that fetch (the timezone is never stored in a profile). **CLEAR** asks
   on the confirmation page (`ERASES THE SAVED PROFILE: NAME ... THE
   CURRENT LOCATION IS NOT CHANGED.`) and then deletes the slot — clearing
