@@ -419,6 +419,24 @@ static void drawSkyTinyLine(const T& t) {
   lastSkyTiny[sizeof(lastSkyTiny) - 1] = '\0';
 }
 
+// Cloud icon + description text. Shared by the full render and the per-minute
+// tiny-line repaint (which clears the whole band this line occupies), so the
+// two can never drift apart. Geometry: cloud 132..137, text line box 129..149
+// (em20: ascent 17 + descent 3), so nothing of it reaches below row 149.
+static void drawSkyDescLine(const T& t) {
+  const SkyPal& p = SKY();
+  const char* desc = wx.valid ? wx.description.c_str() : "No weather data";
+  drawCloud(t, 16, 132, 0.38f, p.desc);   // was white - invisible on the day sky
+  if (nunitoOK)
+    bffText(t, nunitoF20, desc, 40, 129, p.desc, bffFit(nunitoF20, desc, 218 - 40), bgCode(1, 0, 129));
+  else {
+    float dsc = fitSize(desc, 1.75f, 218 - 40);
+    gT->setTextSize(dsc * t.sx);
+    gT->setTextColor(p.desc);
+    gT->drawString(desc, t.X(40), t.Y(129));
+  }
+}
+
 // SPLIT row 1: HUM/H/L left, data age right-aligned at x=213 (the FEELS-chip
 // value's right edge - chips span 12..225 with a ~12px inner inset, and 213
 // stays inside the solid left zone so the per-minute clear band covers the
@@ -527,12 +545,7 @@ static void renderTheme1Legacy(const T& t) {   // SKY - original bitmap-font lay
   gT->setTextSize(2.5f * t.sx); gT->setTextColor(p.unit);
   gT->drawString(tempUnitChar(), t.X(14 + tw + 6), t.Y(76 + 8 * ts - 8 * 2.5f));
 
-  const char* desc = wx.valid ? wx.description.c_str() : "No weather data";
-  drawCloud(t, 16, 132, 0.38f, p.desc);   // was white - invisible on the day sky
-  float dsc = fitSize(desc, 1.75f, 218 - 40);
-  gT->setTextSize(dsc * t.sx); gT->setTextColor(p.desc);
-  gT->drawString(desc, t.X(40), t.Y(129));
-
+  drawSkyDescLine(t);   // cloud icon + description text
   drawSkyTinyLine(t);   // HUM/H/L + data age
 
   char feels[16]; tempOrDash(feels, sizeof(feels), wx.valid, wx.feelsLike);
@@ -564,12 +577,9 @@ static void renderTheme1(const T& t) {   // SKY - Nunito BFF fonts
   bffText(t, nunitoF20, tempUnitChar(), 14 + tw + 6,
           (int)(76 + (nunitoF48.ascent - nunitoF20.ascent) * ts), p.unit, 1.0f, bgCode(1, 0, 95));
 
-  // Cloud icon + description text (em20).
-  const char* desc = wx.valid ? wx.description.c_str() : "No weather data";
-  drawCloud(t, 16, 132, 0.38f, p.desc);
-  bffText(t, nunitoF20, desc, 40, 129, p.desc, bffFit(nunitoF20, desc, 218 - 40), bgCode(1, 0, 129));
-
-  // Tiny row: centered x=116 (em10, dropping to em9 for the NWS two-source form)
+  // Cloud icon + description text (em20), then the tiny row: centered x=116
+  // (em10, dropping to em9 for the NWS two-source form).
+  drawSkyDescLine(t);
   drawSkyTinyLine(t);
 
   // Feels-like chip (em10 label / em20 value).
@@ -1056,9 +1066,17 @@ void updateDynamicTexts() {
       drawSkyDynamicBand(t);   // Nunito band (bitmap fallback inside)
     }
     if (tinyChanged) {
-      // Tiny line band [138..157): the 0.38-scale description cloud ends at
-      // y=137, so starting at 138 cannot clip it.
-      clearThemed(userSettings.theme, t, 14, 138, 204, 19);
+      // Band [127..159): covers the description line box (text 129..149, cloud
+      // 132..137) AND the tiny line (148..158) - both are repainted below.
+      // The old band [138..157) started mid-way through the em20 description
+      // line box (only the cloud, not the text, was considered) and erased
+      // the text's bottom rows every minute the age ticked; the description
+      // then stayed clipped until the next full render.
+      // The band is otherwise empty: temp line box ends at row 124, the
+      // FEELS chip starts at y=162, no sky decorations sit below y=95, and
+      // the right edge (218) leaves the dog zone (x>=221) untouched.
+      clearThemed(userSettings.theme, t, 14, 127, 204, 33);
+      drawSkyDescLine(t);
       drawSkyTinyLine(t);   // re-syncs lastSkyTiny
     }
     return;
