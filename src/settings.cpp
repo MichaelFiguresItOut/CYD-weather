@@ -425,7 +425,7 @@ void drawWeather() {
   tft.setTextSize(1);
   tft.setTextColor(colDim);
   tft.drawString("CURRENT LOCATION", ROW_X + 10, ROW_Y0 + 8);
-  char loc[72], locFit[72];
+  char loc[128], locFit[72];   // 128 = worst-case name + " - " + entry
   if (userSettings.placeName[0])
     snprintf(loc, sizeof(loc), "%s%s%s", userSettings.placeName,
              userSettings.postalCode[0] ? " - " : "", userSettings.postalCode);
@@ -436,7 +436,7 @@ void drawWeather() {
   tft.setTextSize(locSz);
   tft.setTextColor(userSettings.placeName[0] ? C(0xFF, 0xFF, 0xFF) : colHint);
   tft.drawString(locFit, ROW_X + 10, ROW_Y0 + 22);
-  char pc[32];
+  char pc[sizeof(userSettings.postalCode)];
   snprintf(pc, sizeof(pc), "%s",
            userSettings.postalCode[0] ? userSettings.postalCode : "TAP TO ENTER");
   drawListRow(1, "ADD LOCATION", pc, sGrid == 1);
@@ -1306,7 +1306,7 @@ static bool isZipPlus4(const char* c) {
 // -> the entry is kept, a status line is shown, and the coordinates stay
 // put).
 void editLocation() {
-  char code[32];
+  char code[sizeof(userSettings.postalCode)];
   snprintf(code, sizeof(code), "%s", userSettings.postalCode);
   if (keyboardQwerty("ADD LOCATION", "POSTAL CODE OR CITY", code,
                      sizeof(code)) != KEY_OK) {
@@ -1330,7 +1330,7 @@ void editLocation() {
   snprintf(userSettings.postalCode, sizeof(userSettings.postalCode), "%s", code);
   saveLocation();
 
-  char query[32];
+  char query[sizeof(code)];
   if (isZipPlus4(code)) snprintf(query, sizeof(query), "%.5s", code);
   else                  snprintf(query, sizeof(query), "%s", code);
 

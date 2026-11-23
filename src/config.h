@@ -55,7 +55,7 @@ struct UserSettings {
   float lat;                      // weather location (Open-Meteo); default from local_config.h
   float lon;                      // weather location (Open-Meteo); default from local_config.h
   SettingMode locationMode;       // how lat/lon were chosen
-  char postalCode[32];            // postal code or city entered on the
+  char postalCode[64];            // postal code or city entered on the
                                   // LOCATION page (US ZIP, ZIP+4, international
                                   // code, or a city name); "" = none
   char placeName[56];             // resolved location display ("City, Region,
