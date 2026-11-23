@@ -1,8 +1,7 @@
 #pragma once
 
 // ---------------------------------------------------------------------------
-//  Geocoding helpers for the LOCATION settings page (location roadmap,
-//  Phase 1):
+//  Geocoding helpers for the LOCATION settings page (Phase 1):
 //
 //    geocodePostalOpenMeteo() / geocodePostalNominatim() — forward:
 //                       postal code or city name -> candidate places (US
