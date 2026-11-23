@@ -5,8 +5,9 @@ split out of the original monolithic `README.md`. Companion to `README.md`,
 which documents the weather app itself.
 
 ## Board: ESP32-2432S032C-I Cheap Yellow Display ("CYD")
-- ESP32 dual-core, 4 MB flash, ~4 MB external PSRAM (see "Memory" section
-  below), CH340 USB serial → **COM4** @ 115200 baud
+- ESP32 dual-core, 4 MB flash, **no usable PSRAM on this unit** (the CYD
+  comes in WROOM/WROVER variants; this one's PSRAM ID probe fails at boot —
+  see the "Memory" section below), CH340 USB serial → **COM4** @ 115200 baud
   (**USB-C cable into the PC's front USB-C port** — this is the working setup).
   The old USB-A cable into a rear USB-A port enumerated as COM3 but gave flaky
   "port busy / access denied" errors; don't use it. A stale COM3 entry may
@@ -36,7 +37,7 @@ which documents the weather app itself.
 | Backlight (PWM) | 27 |
 | Touch SDA / SCL / RST | 33 / 32 / 25 |
 
-## Memory: internal RAM vs PSRAM (~4 MB; verify per board)
+## Memory: internal RAM vs PSRAM (this unit has no usable PSRAM)
 
 > **Correction (2026-11-22, part 2): the board in use has no usable PSRAM.**
 > A later boot the same day (with PSRAM enabled in the build, `logs/
@@ -53,13 +54,17 @@ which documents the weather app itself.
 > whole decode pipeline fits in internal RAM (see README, "Dog outfit
 > images").
 
-- This board (ESP32-2432S032C-I) has **~4 MB of external PSRAM** in addition
-  to the ESP32's internal SRAM. The verified firmware SDK configuration
-  (arduino-esp32 3.3.12 / ESP-IDF v5.5.5, package
-  `framework-arduinoespressif32-esp32-libs`, `sdkconfig`) enables it:
+- **CYD variant reference** (for units that *do* have the PSRAM chip — this
+  unit does not, see the correction note above): the CYD ships in WROOM (no
+  PSRAM) and WROVER (4 MB PSRAM) variants. The verified firmware SDK
+  configuration (arduino-esp32 3.3.12 / ESP-IDF v5.5.5, package
+  `framework-arduinoespressif32-esp32-libs`, `sdkconfig`) carries the
+  PSRAM-capable settings:
   `CONFIG_SPIRAM=y`, `CONFIG_SPIRAM_MODE_QUAD` (Quad SPI mode),
-  `CONFIG_SPIRAM_SPEED_80M`, `CONFIG_SPIRAM_USE_MALLOC=y` — so PSRAM is
-  available through the ESP-IDF heap-capability allocation APIs. Also
+  `CONFIG_SPIRAM_SPEED_80M`, `CONFIG_SPIRAM_USE_MALLOC=y` — which make PSRAM
+  available through the ESP-IDF heap-capability allocation APIs on boards
+  with the chip. On this unit the runtime probe finds no chip, so none of
+  it takes effect. Also
   relevant: `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096` (small allocations
   stay in internal RAM), `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP` **not set**
   (Wi-Fi/lwIP buffers come from internal RAM), and
@@ -74,18 +79,20 @@ which documents the weather app itself.
   to output a solid 80 MHz clock" path runs **only** when the detected PSRAM
   chip is the legacy 32-Mbit "ver0" part (JEDEC EID byte `0x20`) *and* flash
   + PSRAM both run at 80 MHz. Any other chip runs in normal mode, clocked
-  from the flash host (SPI1) SCLK — SPI2 is never touched. This board's 4 MB
-  PSRAM is **not** that chip, proven empirically: our SD driver
-  (`SPIClass sdSpi(HSPI)`) hard-resets the SPI2 peripheral and reroutes its
-  SCK in `begin()` (`cores/esp32/esp32-hal-spi.c`) — if the clock hack were
-  active, PSRAM would lose its 80 MHz clock and the first decode-buffer
-  write (PSRAM, ~18/48 KB, *after* `SD.begin()`) would hang into a watchdog
-  reset. The board instead decodes and renders the dog images normally.
-  (A PSRAM SPI2 claim would not even block the SD driver — Arduino's SPI
-  bypasses `spi_bus_initialize` and the periph-claim check — it would only
-  break PSRAM.) Consequences:
-  - The SD card on HSPI/SPI2 does **not** conflict with PSRAM on this
-    board; `SPIRAM_OCCUPY_HSPI_HOST` is inert here.
+  from the flash host (SPI1) SCLK — SPI2 is never touched. On this unit the
+  question is moot: the PSRAM ID probe fails (`0xffffffff` — no chip
+  detected), so no PSRAM clock path runs at all and SPI2 is free for the SD
+  card. (If a unit *did* have the legacy chip, our SD driver
+  (`SPIClass sdSpi(HSPI)`) would expose it: it hard-resets the SPI2
+  peripheral and reroutes its SCK in `begin()`
+  (`cores/esp32/esp32-hal-spi.c`), so PSRAM would lose its 80 MHz clock and
+  the first decode-buffer write (*after* `SD.begin()`) would hang into a
+  watchdog reset. Note a PSRAM SPI2 claim would not even block the SD
+  driver — Arduino's SPI bypasses `spi_bus_initialize` and the periph-claim
+  check — it would only break PSRAM.) Consequences:
+  - The SD card on HSPI/SPI2 is conflict-free on this board;
+    `SPIRAM_OCCUPY_HSPI_HOST` is inert here — no PSRAM chip is detected, so
+    the conditional SPI2-claim path never runs.
   - Latent risk on *other* CYD units only: CYD comes in WROOM (no PSRAM) and
     WROVER (4 MB PSRAM) variants, and the PSRAM part can differ per batch.
     On a unit with the legacy ver0 4 MB chip, this firmware would claim SPI2
@@ -110,17 +117,27 @@ which documents the weather app itself.
   has none usable — see the correction note above). The dog PNGs are 256-color
   palette images (color type 3, PLTE + tRNS); a palette source decodes to a
   1 byte/pixel index buffer retained that way, plus the PLTE (768 B) and tRNS
-  (256 B) tables (~13.3 KB retained for 95x128). Peak decode working set is
-  ~25 KB (12.3 KB inflated raw + 12.2 KB indices live during the conversion
-  pass, +2×~95 B row buffers; the ~3.8 KB compressed IDAT is released right
-  after inflate + Adler-32), which fits the ~100 KB internal heap still free
-  after Wi-Fi (largest block ~107 KB). Reason the assets are palettes:
-  non-palette 95×128 RGBA outfits need a ~104 KB working set, which does not
-  fit the internal heap after Wi-Fi initialization (the 2026-11-22 "dog out
-  of memory" diagnosis — README, "Dog outfit images").
+  (256 B) tables — 13,184 B retained for 95x128 (vs 36,480 B for
+  RGB565+alpha). Peak decode working set is 24,638 B (~24 KiB): 12,288 B
+  inflated raw + 12,160 B indices live during the conversion pass, +2×95 B
+  row buffers; the ≤3,756 B compressed IDAT is released right after inflate
+  + Adler-32 so it never coexists with them. Largest single allocation:
+  12,288 B. This fits the post-Wi-Fi internal heap (the captured log shows
+  108,704–154,196 B free across fetches; the dog loads were verified working
+  on the board after the palette files were copied to the card). Reason the
+  assets are palettes: a non-palette 95×128 RGBA outfit needs a 48,768 B
+  (47.6 KB) raw inflate buffer plus 24,320 B image + 12,160 B alpha + 760 B
+  rows (~86 KB in flight, ~109 KB with the compressed IDAT still alive), and
+  the post-Wi-Fi internal heap — ~106-150 KB free but fragmented by
+  Wi-Fi/TLS/JSON allocations — cannot reliably hand out a contiguous 47.6 KB
+  block (the 2026-11-22 "dog out of memory" diagnosis — README, "Dog outfit
+  images").
 - **Guideline for future code:** internal RAM is the scarce, fast resource —
   Wi-Fi, networking, DMA and other time-sensitive allocations must keep
-  working there; PSRAM is slower than internal RAM, so allocation placement
+  working there. On this unit there is no PSRAM at all, so every buffer
+  lives in internal RAM and the decode working-set budgets above are the
+  hard limit. For a PSRAM-equipped CYD unit: PSRAM is slower than internal
+  RAM, so allocation placement
   should reflect the workload and hardware requirements: put large,
   short-lived, sequentially accessed buffers in PSRAM when that relieves
   internal-heap headroom, and keep latency-sensitive or DMA-touching buffers
@@ -292,9 +309,11 @@ PNGs needs (`src/dog_image.cpp`; verified pixel-exact by `test/test_decoder.py`)
   first. Images larger than the zone are then area-averaged down to fit (all
   outfits are exactly 95x128 → no scaling). Memory (2026-11-22, part 2 — no
   usable PSRAM on this board): everything lives in internal RAM; the peak
-  working set is ~25 KB for palette outfits (12.3 KB raw + 12.2 KB indices
-  during the conversion pass, +2×~95 B rows; ~3.8 KB `idat` released after
-  inflate+Adler) vs ~104 KB for non-palette 95×128 RGBA — see "Memory".
+  working set is 24,638 B (~24 KiB) for palette outfits (12,288 B raw +
+  12,160 B indices during the conversion pass, +2×95 B rows; the ≤3,756 B
+  compressed `idat` is released after inflate+Adler so it never coexists
+  with them) vs ~86-109 KB for non-palette 95×128 RGBA (depending on whether
+  the compressed IDAT is still alive) — see "Memory".
 - **Chunk-type comparison — hard-learned (2026-11-20, cost a whole debug session)**:
   PNG chunk types are fixed 4-byte fields, NOT C strings. The decoder must use
   `memcmp(type, "IHDR", 4)` etc. The decoder had carried
@@ -338,10 +357,10 @@ PNGs needs (`src/dog_image.cpp`; verified pixel-exact by `test/test_decoder.py`)
   correlated with failing boots, so 16 MHz was kept. The failures look like
   marginal card contact rather than clock rate — the 3× `SD.begin()` / 3× load
   retries in `weatherInitSdAndDog()` are the mitigation. SPI-host
-  compatibility verified 2026-11-22: PSRAM does **not** occupy SPI2 on this
-  board (it is not the legacy EID-`0x20` 32-Mbit chip that would trigger the
-  80+80 MHz occupancy), so the SD card's use of HSPI is conflict-free — see
-  "Memory" ("SPI2/HSPI occupancy").
+  compatibility verified 2026-11-22: this unit has no usable PSRAM (ID probe
+  fails), so no PSRAM SPI2 occupancy exists to conflict with the SD card's
+  HSPI use — conflict-free by construction; the conditional ESP-IDF path is
+  documented for PSRAM-equipped units in "Memory" ("SPI2/HSPI occupancy").
 - **Image pixels go through BOTH panel quirks** (this cost a debugging session):
   1. Panel inversion: displayed = ~written, same as all other drawing.
   2. LGFX v1 `pushImage(x,y,w,h,const uint16_t*)` with `_swapBytes=false`
@@ -361,7 +380,7 @@ All hit while building the weather app's theme-picker swipe animation
 - **Final frame uses the exact travel distance** (`off = kTravel`), not the eased value — the easing undershoots by 1–2 px and the new card lands off the preview position, leaving a seam.
 - **Partial blits must go through `panel()->writeImage()` with a manual `pixelcopy_t`** (`src_bitwidth = 160` = full sprite row width, `src_x` = first visible column). `LGFXBase::pushImage()` overwrites `src_bitwidth` with the sub-rect width, so each row is read with the wrong stride and adjacent pixels shift — visible as garbled pixels along the moving edge. A 16→16-bit copy is a raw row transfer whose byte order matches `push_sprite()` exactly.
 - **`writeImage(..., use_dma)` must match the buffer's pool.** Allocation ladder per card: `createSprite()` (DMA-capable pool → row DMA, `use_dma=true`) → `heap_caps_malloc(MALLOC_CAP_8BIT)` + `setBuffer()` (general heap, **not DMA-accessible** → `use_dma=false`, rows CPU-pumped, still smooth). LGFX treats external buffers as "Preallocated", so `deleteSprite()` never frees them — `freeSwipeSprites()` owns their lifecycle. Passing `use_dma=true` for an 8-bit-pool buffer sends garbage (the panel's DMA cannot read that pool).
-- **Keep the dog buffers loaded during the bake — no free/reload dance.** Free heap after WiFi/NTP is ~134 KB; two sprites (76.8 KB) + the dog (~36 KB) fit. The original approach freed the dog, allocated the sprites, then reloaded the dog before baking — but that reload peaks at ~100 KB against only ~93 KB of free heap and **always fails**, so every card was baked without the dog. Symptom: "dog missing in every theme" in the picker only (main screen fine, because it renders live). If a sprite can't be allocated at all, the immediate-mode fallback (re-render both themes clipped per frame) still runs, dog included.
+- **Keep the dog buffers loaded during the bake — no free/reload dance.** Free heap after WiFi/NTP is ~134 KB; the two card sprites (38.4 KB each) + the retained dog buffers (~13.2 KB palette indices + PLTE/tRNS) fit. History: the original approach freed the dog, allocated the sprites, then reloaded the dog before baking — with the pre-conversion ~18 KB RGBA dog assets that reload peaked at ~100 KB against only ~93 KB of free heap and **always failed**, so every card was baked without the dog (symptom: "dog missing in every theme" in the picker only; the main screen renders live and was fine). The 2026-11-22 palette assets dropped the reload peak to ~24.6 KB, so a free/reload dance would fit in memory now — the no-free rule is kept for simplicity, and because keeping the dog loaded is what puts the outfit into the baked cards. If a sprite can't be allocated at all, the immediate-mode fallback (re-render both themes clipped per frame) still runs, dog included.
 
 ## ArduinoJson gotcha (caused the "night never triggers" bug)
 - `variant | true` only accepts JSON **boolean literals**. Open-Meteo returns

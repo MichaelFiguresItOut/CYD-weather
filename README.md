@@ -101,25 +101,33 @@ current weather. One of 17 palette PNGs on the SD card root is selected by
   and the image data was read and inflated — the failure was the allocation
   of the decode buffers):
   - At boot the `error.png` load succeeded because the decoder ran *before*
-    Wi-Fi initialization. Once Wi-Fi, HTTPS/mbedTLS and JSON processing held
-    their share of the internal heap, the decoder's ~104 KB peak working set
-    no longer fit: total free heap looked sufficient (~122 KB), but the
-    largest contiguous block (~63 KB, from the captured boot log) was too
-    small for the next allocation as the buffers accumulated. The
+    Wi-Fi initialization: the once-per-boot heap report showed internal free
+    198 KB (largest block 107 KB) just before the decode, and the full
+    ~104-109 KB working set fit, leaving 100 KB free / largest block 37 KB
+    at the decode-peak probe. Once Wi-Fi, HTTPS/mbedTLS and JSON processing
+    held their share, the post-fetch heap still held ~106-150 KB free
+    (108,704–154,196 B across the captured fetches) but was fragmented: the
+    47.6 KB `raw` buffer allocation failed during the fetches (in one
+    cluster even the 24 KB `img` buffer), while a heap snapshot ~150 ms
+    after one OOM cluster still showed 122 KB free / largest block 67 KB —
+    a largest-contiguous-block problem, not a total-capacity one. The
     `error.png` fallback failed the same way — it needs essentially the same
     working set. (This documents the *captured* incident; earlier
     missing-dog incidents may have had other causes — see the SD card
     section below.)
-  - Peak working set (current 95×128 RGBA outfits; the allocations overlap
-    while decoding):
+  - Peak working set (the 95×128 RGBA outfits as they were on the card then;
+    in the part-1 code all five allocations overlap — `idat` was only freed
+    at the end of the load):
 
-    | Buffer | Approx. size |
+    | Buffer | Size |
     |---|---:|
-    | Compressed IDAT (`idat`) | 18 KB |
-    | Raw/unfiltered image data (`raw`) | 48 KB |
-    | RGB565 output image (`img`) | 24 KB |
-    | Alpha buffer (`alpha`) | 12 KB |
-    | Row buffers (×2) | 760 bytes total |
+    | Compressed IDAT (`idat`) | 16,186–22,973 B per file (varies) |
+    | Raw/unfiltered image data (`raw`) | 48,768 B |
+    | RGB565 output image (`img`) | 24,320 B |
+    | Alpha buffer (`alpha`) | 12,160 B |
+    | Row buffers (×2) | 760 B total |
+
+    ~104 KB at a typical IDAT size, up to ~109 KB for the largest file's.
 
   - **Fix** (`src/dog_image.cpp`): the two *transient* buffers now request
     PSRAM first — `idat` grows via PSRAM-aware reallocation as compressed
@@ -128,12 +136,15 @@ current weather. One of 17 palette PNGs on the SD card root is selected by
     downscale buffers stay in internal RAM (they are retained between
     renders or tiny). If PSRAM is unavailable or a PSRAM allocation fails,
     the helpers (`psMallocFirst()`/`psReallocFirst()`) fall back to ordinary
-    internal allocation, so boards without PSRAM behave as before. Effect:
-    the internal-heap peak drops from ~104 KB to ~37 KB — the large
-    temporary buffers now use the board's ~4 MB PSRAM instead of competing
-    with Wi-Fi and the other internal-RAM users (configuration details:
-    `docs/CYD-HARDWARE.md`, "Memory"). Decoding behavior, dimensions, output
-    quality, SD operations and cleanup are unchanged.
+    internal allocation, so boards without PSRAM behave as before. Effect on
+    a PSRAM-equipped board: the internal-heap peak drops from ~104 KB to
+    ~37 KB — the large temporary buffers use the board's PSRAM instead of
+    competing with Wi-Fi and the other internal-RAM users (configuration
+    details: `docs/CYD-HARDWARE.md`, "Memory"). On the board in use this
+    helped nothing — there is no usable PSRAM (see part 2 below), the
+    fallback kept the peak in internal RAM and the post-Wi-Fi OOMs
+    continued. Decoding behavior, dimensions, output quality, SD operations
+    and cleanup are unchanged.
   - **Diagnostics:** once per boot, before the first decode:
     `[DOG] heap: PSRAM detected (free … KB, largest block … KB), internal
     free … KB (largest block … KB)` (`PSRAM NOT detected` if absent), and
@@ -145,18 +156,22 @@ current weather. One of 17 palette PNGs on the SD card root is selected by
     (which show up as `[SD]` / `read error …` lines).
   - **Verified (2026-11-22):** `pio run` succeeds with no warnings;
     `test/test_decoder.py` passes all 17 dog PNGs (206,720 pixels checked);
-    the existing NWS tests pass; the firmware was flashed successfully and
-    the dog images were visibly present afterward.
+    the existing NWS tests pass. The firmware flashed, but on the actual
+    board the post-Wi-Fi OOMs continued — there is no usable PSRAM to fall
+    onto (see part 2 below).
 - **Decoder memory (2026-11-22, part 2): no usable PSRAM — palette assets,
   internal RAM only** — a later boot log the same day (`logs/
   device-monitor-261122-193056.log`) settled the PSRAM question for the board
   in use: `quad_psram: PSRAM ID read error: 0xffffffff, PSRAM chip not found
   or not supported` → `PSRAM NOT detected`. With no PSRAM to fall onto, every
   post-Wi-Fi dog load OOMed (`out of memory (raw buffer, 47 KB)` / `(rgb
-  buffer)`). The one decode that reached its peak (boot, pre-Wi-Fi) left the
-  heap at internal free 100 KB / largest block 37 KB — the ~104 KB RGBA
-  working set of the PSRAM-first code eats the whole remainder of the heap,
-  so after Wi-Fi there isn't even a 47 KB block left.
+  buffer)`) — the heap still held ~106-150 KB free (108,704–154,196 B across
+  the captured fetches), but Wi-Fi/TLS/JSON allocations fragmented it so no
+  contiguous 47.6 KB block existed during a fetch (a snapshot ~150 ms after
+  one OOM cluster still showed 122 KB free / largest block 67 KB). The one
+  decode that reached its peak (boot, pre-Wi-Fi, 198 KB free / largest block
+  107 KB) loaded fine and left 100 KB free / largest block 37 KB at the
+  decode-peak probe.
   - **Fix 1 — assets are 256-color palettes now.** All 17 `dogs/*.png` were
     converted to color type 3 (PLTE 256 entries + full 256-entry tRNS,
     dimensions and anti-aliased edges unchanged): ~18 KB → ~4.5 KB per file
@@ -166,17 +181,22 @@ current weather. One of 17 palette PNGs on the SD card root is selected by
     (white) and night backgrounds (`scratch-folder/verify_vs_original.py`).
   - **Fix 2 — the decoder keeps palette images as indices** (`src/
     dog_image.cpp`): 1 byte/pixel index buffer + static PLTE/tRNS tables
-    (~13.3 KB retained, vs ~35.7 KB RGB565+alpha). Per-pixel alpha is the
-    tRNS lookup (index at/beyond the tRNS table length = opaque, per spec);
-    `compositeRow()`/`dogRowSpan()` do the PLTE/tRNS lookup + blend at draw
-    time. Peak decode working set drops from ~104 KB to ~25 KB (12.3 KB raw
-    + 12.2 KB indices live during the conversion pass, +2×~95 B rows; the
-    ~3.8 KB compressed IDAT is released right after inflate + Adler-32 so it
-    never coexists with the others) — it fits the ~100 KB / 107 KB-largest-
-    block internal heap still free after Wi-Fi. Non-palette sources (grey/
-    RGB/RGBA) still decode to RGB565+alpha for robustness; a palette source
-    larger than the 96x128 corner zone is expanded to RGB565+alpha first,
-    since the area-average scalers work on that layout.
+    (13,184 B retained for 95×128, vs 36,480 B for RGB565+alpha). Per-pixel
+    alpha is the tRNS lookup (index at/beyond the tRNS table length =
+    opaque, per spec); `compositeRow()`/`dogRowSpan()` do the PLTE/tRNS
+    lookup + blend at draw time. Peak decode working set drops from ~86-109
+    KB (non-palette RGBA: 48,768 B `raw` + 24,320 B `img` + 12,160 B `alpha`
+    + 760 B rows, plus the compressed IDAT, up to 22,973 B, while it is still
+    alive) to 24,638 B (~24 KiB) — 12,288 B `raw` + 12,160 B indices live
+    during the conversion pass, +2×95 B rows; the ≤3,756 B compressed IDAT
+    is released right after inflate + Adler-32 so it never coexists with the
+    others. The largest single allocation is 12,288 B, and the set fits the
+    post-Wi-Fi internal heap (~106-150 KB free in the captured log); loads
+    verified working on the board after the palette files were copied to the
+    card. Non-palette sources (grey/RGB/RGBA) still decode to RGB565+alpha
+    for robustness; a palette source larger than the 96x128 corner zone is
+    expanded to RGB565+alpha first, since the area-average scalers work on
+    that layout.
   - `-DBOARD_HAS_PSRAM` was removed from `platformio.ini` and the
     `psMallocFirst()`/`psReallocFirst()` helpers deleted (plain
     `malloc()`/`realloc()`; this board has no usable PSRAM).
@@ -191,9 +211,17 @@ current weather. One of 17 palette PNGs on the SD card root is selected by
   case — a plain reboot fixed it; `test/capture_boot.py` resets + captures).
   Boot now retries `SD.begin()` and `loadDogImage()` up to 3 times each (~1.4 s
   worst case), so a marginal contact usually recovers without a manual reboot.
-  Flashing itself never touches the card (esptool writes only ESP32 flash; the
-  firmware is read-only on SD) — a missing dog after flashing is always this
-  transient boot failure, not file loss.
+- **SD card asset deployment — flashing never updates the card's PNGs.** The
+  outfit PNGs are runtime data read from the SD card root; esptool writes only
+  ESP32 flash, so after flashing a firmware that expects different assets
+  (like the 2026-11-22 palette conversion) the old files stay on the card
+  until the converted `dogs/*.png` are manually copied to the SD root. A
+  missing dog right after a flash is either the transient boot failure above
+  or stale assets on the card — the `[DOG]` lines tell which: `out of memory
+  (…) buffer` = the on-card asset is too big for the decode pipeline (2026-
+  11-22: the old 16-23 KB RGBA files OOMed on this no-PSRAM board; copying
+  the new ~4 KB palette files brought the dog back), while `read error …` /
+  `not found on SD card` = card contact or file problem.
 
 ## Firmware: display items → where they live (drawing in `src/render.cpp`; data in the `wx` global)
 | Item | Function / notes |

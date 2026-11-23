@@ -132,11 +132,12 @@ void drawThemePicker() {
 //  rect width.  A 16-bit -> 16-bit same-depth copy is a raw row DMA transfer
 //  (for DMA-capable buffers) - byte order matches push_sprite() exactly.
 //
-//  RAM: the ~36 KB dog PNG buffers stay loaded during the animation -
-//  two card sprites (38.4 KB each) + the dog fit in the ~134 KB free heap
-//  after WiFi, and keeping the dog loaded is what puts the outfit into the
-//  baked cards (a reload between the sprite alloc and the bake does not
-//  fit: it peaks at ~100 KB against ~93 KB of free heap).
+//  RAM: the ~13.2 KB retained dog buffers (palette indices + PLTE/tRNS)
+//  stay loaded during the animation - two card sprites (38.4 KB each) +
+//  the dog fit in the ~134 KB free heap after WiFi, and keeping the dog
+//  loaded is what puts the outfit into the baked cards (a reload between
+//  the sprite alloc and the bake would fit too - it peaks at ~24.6 KB -
+//  but the free/reload dance is avoided anyway).
 //
 //  Fallbacks (in order): each sprite is allocated from the DMA-capable pool
 //  first, then from general heap (rows then pumped by CPU - still smooth);
@@ -232,11 +233,11 @@ void animatePickerSwipe(int dir) {   // +1 = next (enters from right), -1 = prev
 
   drawPickerChrome(newIdx);   // background, border, bars with NEW labels, hint
 
-  // The ~36 KB dog buffers stay loaded for the whole animation: the two
-  // 38.4 KB sprite buffers + the dog fit in the ~134 KB free heap after
-  // WiFi, and keeping the dog loaded is what puts the outfit into the
-  // baked cards (a reload between sprite alloc and bake peaks at ~100 KB
-  // against only ~93 KB of free heap and always fails).
+  // The ~13.2 KB dog buffers (palette indices + PLTE/tRNS) stay loaded for
+  // the whole animation: the two 38.4 KB sprite buffers + the dog fit in
+  // the ~134 KB free heap after WiFi, and keeping the dog loaded is what
+  // puts the outfit into the baked cards (a reload between sprite alloc
+  // and bake peaks at ~24.6 KB - it would fit, but we avoid the dance).
   const bool sprites = allocSwipeSprites();
   if (sprites) {
     const uint32_t tr = millis();
