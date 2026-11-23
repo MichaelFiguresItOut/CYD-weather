@@ -18,7 +18,7 @@ This file is the shared reference for future work: read it first in any new thre
 - `src/config.{h,cpp}` — centralized configuration: `UserSettings` (all user-adjustable settings + site defaults), app timing/NTP constants, NVS persistence for every setting (`loadSettings()` + per-setting `save*()`), automatic/manual/unconfigured modes for location and timezone; see the Configuration section
 - firmware modules: `src/display.{h,cpp}` (TFT init), `src/wifi_conn.{h,cpp}` (WiFi credential seam + connect/auto-reconnect + scan), `src/weather.{h,cpp}` (fetch/parse, SD card + dog image), `src/render.{h,cpp}` (themes + per-second partial updates), `src/picker.{h,cpp}` (theme picker + swipe animation), `src/touch.{h,cpp}` (touch zones + gestures), `src/settings.{h,cpp}` (Settings app; see "Settings app (touchscreen)"), `src/keyboard.{h,cpp}` (blocking QWERTY + numeric keypad modals), `src/geocode.{h,cpp}` (location lookup (postal code / city) + reverse geocoding for the LOCATION page), `src/time_util.{h,cpp}` (NTP + timezone), `src/metar.{h,cpp}` / `src/rain_timeline.{h,cpp}` (rain analysis), `src/nws_station.{h,cpp}` (NWS station discovery + latest observations + automatic backup/fallback logic for the STATIONS page), `src/theme_ids.h` (theme indices)
 - `src/nunito_bff.h` — generated Nunito BFF font blobs (masters em9/10/12/13/20/48) shared by themes 1 (SKY), 2 (SPLIT) and 3 (BENTO); regenerate with `tools/make_nunito_bff.py`, verify with `tools/check_bff_space.py`
-- `src/dog_image.{h,cpp}` — SD-card PNG decoder; keeps natural RGB565 + alpha, composites per row at draw time (see Dog outfit images section)
+- `src/dog_image.{h,cpp}` — SD-card PNG decoder; keeps palette indices (+PLTE/tRNS) for palette images, natural RGB565 + alpha for the rest, composites per row at draw time (see Dog outfit images section)
 - `lib/puff/` — vendored Mark Adler `puff.c/h` (public-domain minimal DEFLATE inflater; the core's zlib is not linked into the app)
 - `test/test_decoder.py` — host-side validation of the decode + composite pipeline against PIL for all 17 outfit PNGs (`python test/test_decoder.py`; ~206k px checked)
 - `test/tz_verify.py` — host-side timezone verification: mirrors the C++ catalog + `localOffsetSec()` DST math and hourly-sweeps 2024–2033 for all 18 catalog zones against Python `zoneinfo` (IANA tzdb) (`python test/tz_verify.py`; ~1.58M samples, all must match)
@@ -29,11 +29,11 @@ This file is the shared reference for future work: read it first in any new thre
 - `tools/preview_theme3.py` — same for theme 2 (SPLIT; the 3 in the filename is not the theme number), including LGFX's fixed-point fractional-scale glyph drawing (`python tools/preview_theme3.py [dog.png]`)
 - `tools/preview_theme4.py` — same for theme 3 (BENTO; the 4 in the filename is not the theme number): mirrors `renderTheme3Nunito()` line for line (RGB565-exact palette, same fit math, procedural sun/moon/cloud/umbrella icons) → `preview_theme4_{day,night}.png`. Its `PAL` dicts duplicate `bentoDay`/`bentoNight` — update both together
 - `platformio.ini` — build config (board, partitions, deps)
-- SD card root: 17 outfit PNGs from `dogs/` (all 95x128 RGBA with transparency — copy them to the card root, see Dog outfit images section); they live on the card, not in flash
+- SD card root: 17 outfit PNGs from `dogs/` (all 95x128, 256-color palette with tRNS transparency — copy them to the card root, see Dog outfit images section); they live on the card, not in flash
 
 ## Dog outfit images (SD card PNGs)
 Golden retriever in the bottom-right corner, wearing an outfit that matches the
-current weather. One of 17 RGBA PNGs on the SD card root is selected by
+current weather. One of 17 palette PNGs on the SD card root is selected by
 `selectDogImage()` in `src/weather.cpp` and reloaded whenever the selection changes.
 
 **Selection chart** (feels-like temperature in °F; rain overrides everything):
@@ -55,10 +55,11 @@ current weather. One of 17 RGBA PNGs on the SD card root is selected by
   mainly clear; anything denser → no sun), otherwise the Open-Meteo WMO code
   (0/1 = sunny). Night or unknown day/night never gets `_sun`. The determination
   is logged in the `[WX] ... sun=0|1` line.
-- **Pipeline details** — PNG decode (puff inflate, scanline unfilter, natural RGB565 +
-  alpha), row-wise alpha compositing, SD wiring, and the byte-swap/inversion quirks:
-  see `docs/CYD-HARDWARE.md` ("SD card PNG pipeline"). `test/test_decoder.py` verifies
-  the pipeline is pixel-exact against PIL.
+- **Pipeline details** — PNG decode (puff inflate, scanline unfilter; palette
+  sources kept as 1 byte/pixel indices + PLTE/tRNS, other sources as natural
+  RGB565 + alpha), row-wise alpha compositing, SD wiring, and the byte-swap/
+  inversion quirks: see `docs/CYD-HARDWARE.md` ("SD card PNG pipeline").
+  `test/test_decoder.py` verifies the pipeline is pixel-exact against PIL.
 - **Chunk-type comparison trap (hard-learned, 2026-11-20)**: PNG chunk names are
   fixed 4-byte fields, **not null-terminated strings** — the decoder must compare them
   with `memcmp(type, "IHDR", 4)`, never `strcmp()`. The old `strcmp()` read past the
@@ -146,6 +147,45 @@ current weather. One of 17 RGBA PNGs on the SD card root is selected by
     `test/test_decoder.py` passes all 17 dog PNGs (206,720 pixels checked);
     the existing NWS tests pass; the firmware was flashed successfully and
     the dog images were visibly present afterward.
+- **Decoder memory (2026-11-22, part 2): no usable PSRAM — palette assets,
+  internal RAM only** — a later boot log the same day (`logs/
+  device-monitor-261122-193056.log`) settled the PSRAM question for the board
+  in use: `quad_psram: PSRAM ID read error: 0xffffffff, PSRAM chip not found
+  or not supported` → `PSRAM NOT detected`. With no PSRAM to fall onto, every
+  post-Wi-Fi dog load OOMed (`out of memory (raw buffer, 47 KB)` / `(rgb
+  buffer)`). The one decode that reached its peak (boot, pre-Wi-Fi) left the
+  heap at internal free 100 KB / largest block 37 KB — the ~104 KB RGBA
+  working set of the PSRAM-first code eats the whole remainder of the heap,
+  so after Wi-Fi there isn't even a 47 KB block left.
+  - **Fix 1 — assets are 256-color palettes now.** All 17 `dogs/*.png` were
+    converted to color type 3 (PLTE 256 entries + full 256-entry tRNS,
+    dimensions and anti-aliased edges unchanged): ~18 KB → ~4.5 KB per file
+    (IDAT ~2.6–3.7 KB). Quality approved side-by-side
+    (`scratch-folder/dog-palette-compare/`); rendered-composite diff vs the
+    original reference: p99 ≤ 17/255, max ≤ 33/255, mean ≤ 2.8 on the day
+    (white) and night backgrounds (`scratch-folder/verify_vs_original.py`).
+  - **Fix 2 — the decoder keeps palette images as indices** (`src/
+    dog_image.cpp`): 1 byte/pixel index buffer + static PLTE/tRNS tables
+    (~13.3 KB retained, vs ~35.7 KB RGB565+alpha). Per-pixel alpha is the
+    tRNS lookup (index at/beyond the tRNS table length = opaque, per spec);
+    `compositeRow()`/`dogRowSpan()` do the PLTE/tRNS lookup + blend at draw
+    time. Peak decode working set drops from ~104 KB to ~25 KB (12.3 KB raw
+    + 12.2 KB indices live during the conversion pass, +2×~95 B rows; the
+    ~3.8 KB compressed IDAT is released right after inflate + Adler-32 so it
+    never coexists with the others) — it fits the ~100 KB / 107 KB-largest-
+    block internal heap still free after Wi-Fi. Non-palette sources (grey/
+    RGB/RGBA) still decode to RGB565+alpha for robustness; a palette source
+    larger than the 96x128 corner zone is expanded to RGB565+alpha first,
+    since the area-average scalers work on that layout.
+  - `-DBOARD_HAS_PSRAM` was removed from `platformio.ini` and the
+    `psMallocFirst()`/`psReallocFirst()` helpers deleted (plain
+    `malloc()`/`realloc()`; this board has no usable PSRAM).
+  - **Verified (2026-11-22):** `pio run` builds clean (RAM 20.0%, Flash
+    56.4%); `test/test_decoder.py` passes all 17 images (206,720 px; index →
+    PLTE/tRNS resolution exact vs PIL, composite rows exact, opaque pixels
+    untouched) plus a synthetic short-tRNS image proving the
+    index-beyond-tRNS → alpha 255 default matches PIL; host-side render
+    comparison vs the original references passes as above.
 - **Transient SD failures**: if the dog is missing but everything else renders,
   check serial for `[SD]`/`[DOG]` lines first (card seating/contact was one such
   case — a plain reboot fixed it; `test/capture_boot.py` resets + captures).
@@ -441,7 +481,7 @@ Main page: five section tiles.
   keep the cursor visible. Its bottom row is `123` (letter/symbol pages),
   SPACE and DEL; the shift toggle (`abc`/`ABC`) and BAK sit in the Z-row —
   no duplicated labels in either layout.
-- **STATIONS** (Phase 3/4/6, `src/nws_station.{h,cpp}`; US coverage only —
+- **STATIONS** (Phase 3/4/6/6.5, `src/nws_station.{h,cpp}`; US coverage only —
   footer: `NWS STATIONS (US ONLY) - TAP SCAN TO LOOK UP`): the info block
   shows `WEATHER DATA BY OPEN-METEO.COM`, then `PREFERRED STATION` and the
   selected station — `KABC - AMARILLO, GILLETTE FIELD` (size 2, truncated
@@ -456,12 +496,16 @@ Main page: five section tiles.
   list (`BACKUPS: KLGA KTEB KEWR`, or `BACKUPS: NONE`). The only button is
   `SCAN FOR LOCAL WEATHER STATION`. The scan (blocking; a message page with `PLEASE WAIT` footer
   shows each step: `CONNECTING TO WIFI...`, `LOOKING UP NWS POINT...`,
-  `FETCHING STATION LIST...`, then `CHECKING KXXX ...` per station) hits
+  `FETCHING STATION LIST...`, then `CHECKING KXXX ...` per station while
+  the Phase 6.5 quality selection runs) hits
   `api.weather.gov/points/{lat},{lon}` for the gridpoint (404 = outside US
   coverage → `NO STATIONS FOUND`, selection cleared), the gridpoint's
-  station list, and each nearby station's `observations/latest` — one
-  HTTPS request per station, lazily, for the stations on the current
-  results page only (up to 4 per page turn). The station list arrives
+  station list, then the quality selection checks each of the up-to-8
+  nearest suitable stations' `observations/latest` (one HTTPS request per
+  station) and persists the quality-ranked preferred + automatic backups
+  before the results page is shown; observations not checked that way are
+  fetched lazily, for the stations on the current results page only (up to
+  4 per page turn). The station list arrives
   chunked (`Transfer-Encoding: chunked`) and is de-framed stream-by-stream
   in `nwsGetCapped()` (plain vs chunked decided from the first byte;
   offline decoder tests in `test/nws/`). The results page (4 per page,
@@ -479,9 +523,11 @@ Main page: five section tiles.
   `OBSERVATION NOT CHECKED` instead. Tapping a station row selects it —
   id, name, distance and provider are persisted to NVS (`cydwx`) — and the
   firmware automatically records up to 3 backup stations from the same
-  scan results (`nwsBuildFallbackList()`: nearest suitable stations within
-  100 km, CoCoRaHS excluded, never the pick itself) and persists them in
-  NVS (`cydwx/nwsStnBk`); all of it survives reboot. The backup list is
+  scan's check set (Phase 6.5: the same quality ranking as the auto
+  selection, excluding the pick; without NTP that is the plain
+  nearest-first suitable list within 100 km — the former
+  `nwsBuildFallbackList()` result) and persists them in NVS
+  (`cydwx/nwsStnBk`); all of it survives reboot. The backup list is
   managed internally (never user-configurable) and is rebuilt on every
   selection. Phase 5 wires the selection into the dashboard: the temperature
   and feels-like come from the first usable observation in the order
@@ -496,10 +542,10 @@ Main page: five section tiles.
   LOCATION: the previous selection is invalidated first (it belongs to the
   old location and must not be reused), the discovery runs with the centered
   status lines (`UPDATING NWS STATIONS...`, `CONNECTING TO WIFI...`,
-  `LOOKING UP NWS POINT...`, `FETCHING STATION LIST...` — same pattern as
-  the Open-Meteo location lookup), and the first suitable station (nearest
-  first, CoCoRaHS excluded) becomes the preferred with the automatic
-  backups recorded from the same list — exactly what a SCAN selection
+  `LOOKING UP NWS POINT...`, `FETCHING STATION LIST...`, `CHECKING KXXX ...`
+  per checked station — same pattern as the Open-Meteo location lookup),
+  and the Phase 6.5 quality selection runs: the quality-ranked preferred +
+  automatic backups are persisted, exactly what the SCAN auto-selection
   persists (the user can still change the pick afterwards via SCAN). The
   outcome is shown briefly before returning to LOCATION:
   `NWS: KLGA + 3 BACKUPS` (neutral color), `NO NWS STATIONS - USING
@@ -508,6 +554,27 @@ Main page: five section tiles.
   `STATION UPDATE FAILED - RETRY` on a transient network/API failure — the
   SCAN button on this page re-runs the discovery, and a failure never
   touches the coordinates or any unrelated setting (Wi-Fi, timezone).
+- **Phase 6.5 — quality-based preferred + backup selection:** replaces
+  "first suitable station (nearest first) wins" with a balance of distance
+  and observation freshness, applied to both the SCAN auto-selection and
+  the automatic post-location-change update (one shared code path). The
+  search grows from a 10 km radius in 10 km steps to 100 km; within it, the
+  observations of up to 8 nearest suitable stations (CoCoRaHS excluded)
+  are checked, one HTTPS request each with a `CHECKING KXXX ...` progress
+  line (the page never looks frozen). The preferred is the nearest station
+  with a usable observation (fresh ≤ 90 min, NTP-synced) unless a station
+  at most 10 km farther has an observation at least 20 min fresher (equal
+  ages or a smaller difference keep the nearer one); up to 3 backups are
+  then ranked the same way on the remaining candidates. A stale or failed
+  observation never excludes a station — it is ranked after all usable
+  ones, nearest first, so a temporary API failure only costs one selection
+  cycle (the runtime fallback, Phase 5, keeps working unchanged: preferred
+  → backups → Open-Meteo). Without NTP the selection falls back to plain
+  nearest-first (no reliable age comparison) — the Phase 6 behavior. In
+  sparse areas (no suitable station within 100 km) the nearest suitable
+  station overall is selected, as in Phase 6. The ranking logic lives in
+  `nwsRankStations()` / `nwsRankPrepare()` (`src/nws_station.cpp`) and is
+  host-tested 1:1 in `test/nws/test_rank.py`.
 
 ## WiFi
 - Build-time defaults + site location live in `src/local_config.h` (gitignored — copy `src/local_config.h.example` to `src/local_config.h` and fill in your WiFi SSID/password and your site's lat/lon; never commit real values). Runtime credentials are read through one seam, `wifiCredentials()` (`wifi_conn.cpp`), which prefers **user-saved NVS credentials** (`cydwx/ssid` + `cydwx/pass`, written by the Settings > WI-FI page on a successful join — `wifiSaveCredentials()`) and falls back to the build-time values. NVS is plaintext (no encryption; acceptable for this device). Auto-reconnect in `loop()` (`WIFI_RETRY_MS` 10 s check).
@@ -815,6 +882,22 @@ Pi implements:
 - Handle offline conditions without blocking the dashboard.
 
 **Deliverable:** A location and station management experience that works when moving the CYD between places such as NYC and NJ.
+
+### Phase 6.5 — Quality-based preferred + backup station selection (done)
+
+**Goal:** Pick the preferred station and its automatic backups on observation quality, not just on distance.
+
+Pi implements:
+
+- Grow the candidate search from a 10 km radius in 10 km steps, up to 100 km.
+- Check the latest observation of up to 8 nearest suitable stations (CoCoRaHS excluded), showing progress while doing so.
+- Prefer a fresh observation over a closer stale one when the fresher station is at most 10 km farther and its observation is at least 20 min newer.
+- Rank up to 3 automatic backups with the same algorithm on the remaining candidates.
+- Never exclude a station because of a temporary API failure: stale/failed observations are ranked after all usable ones, nearest first.
+- Preserve plain nearest-first selection while NTP is not synced (no reliable age comparison), and keep the runtime fallback order (preferred → backups → Open-Meteo) unchanged.
+- Apply the same selection to the manual SCAN flow and to the automatic update after a location change.
+
+**Deliverable:** Both station-selection flows persist a preferred station plus up to 3 backups chosen by the distance/freshness ranking, and `test/nws/test_rank.py` pins the ranking rules (incl. the worked example from the spec).
 
 ### Phase 7 — Multiple saved location profiles
 

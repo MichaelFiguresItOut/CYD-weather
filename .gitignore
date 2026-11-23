@@ -20,6 +20,9 @@ test/*.txt
 # Scratch folder (images/notes handed to the agent for review; never synced)
 scratch-folder/
 
+# Local serial captures (test/capture_boot.py / device monitor output)
+logs/
+
 # Manual file backups (superseded by git history)
 *.bak-*
 

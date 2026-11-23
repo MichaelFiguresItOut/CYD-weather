@@ -37,6 +37,22 @@ which documents the weather app itself.
 | Touch SDA / SCL / RST | 33 / 32 / 25 |
 
 ## Memory: internal RAM vs PSRAM (~4 MB; verify per board)
+
+> **Correction (2026-11-22, part 2): the board in use has no usable PSRAM.**
+> A later boot the same day (with PSRAM enabled in the build, `logs/
+> device-monitor-261122-193056.log`) probes the chip at startup: `quad_psram:
+> PSRAM ID read error: 0xffffffff, PSRAM chip not found or not supported` →
+> `PSRAM NOT detected` (PSRAM free 0 KB). The entries below describing a 4 MB
+> PSRAM on this board are therefore void for this unit — it behaves like the
+> WROOM variant (no PSRAM), and the "not that chip" inference was consistent
+> with either, the decode evidence being explainable by the internal-RAM
+> fallback. They remain valid reference for *other* CYD units (WROVER / 4 MB
+> PSRAM variants, per-batch chip differences). Consequence for the firmware
+> (2026-11-22, part 2): `-DBOARD_HAS_PSRAM` was removed, the PSRAM-first
+> helpers deleted, and the dog PNGs converted to 256-color palettes so the
+> whole decode pipeline fits in internal RAM (see README, "Dog outfit
+> images").
+
 - This board (ESP32-2432S032C-I) has **~4 MB of external PSRAM** in addition
   to the ESP32's internal SRAM. The verified firmware SDK configuration
   (arduino-esp32 3.3.12 / ESP-IDF v5.5.5, package
@@ -77,7 +93,9 @@ which documents the weather app itself.
     → the first image load hangs (watchdog reset loop). Fix for such a unit:
     set `SPIRAM_SPEED_40M` in the build (at 40 MHz even ver0 chips share the
     flash host clock, so no SPI2 claim).
-- **Allocation approach** (as implemented in `src/dog_image.cpp`):
+- **Allocation approach** (reference for a PSRAM-equipped build — *not used
+  by the current firmware*, which has no usable PSRAM on this board, see the
+  correction note above):
   - Fresh buffers: `heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)`.
   - Dynamically growing buffers: `heap_caps_realloc(p, n, MALLOC_CAP_SPIRAM |
     MALLOC_CAP_8BIT)` — preserves contents, may move the block between the
@@ -88,16 +106,18 @@ which documents the weather app itself.
     fails, so the code also runs on boards without PSRAM.
   - Ordinary `free()` remains valid for buffers from either pool
     (`free()` ≡ `heap_caps_free()`).
-- **Current usage:** the PNG decoder's large *transient* buffers — compressed
-  IDAT (~18 KB) and inflated raw image data (~48 KB), see "SD card PNG
-  pipeline" — are allocated PSRAM-first with internal fallback
-  (`psMallocFirst()` / `psReallocFirst()`). The *retained* decoded buffers
-  (RGB565 ~24 KB + alpha ~12 KB) and the small row/downscale buffers stay in
-  internal RAM. Reason: after Wi-Fi + mbedTLS initialization the internal
-  DMA heap's largest contiguous block is only ~63 KB, so the decoder's ~104
-  KB peak working set no longer fit there (the 2026-11-22 "dog out of
-  memory" diagnosis — README, "Dog outfit images"). PSRAM absorbs the
-  transient buffers and the internal peak drops to ~37 KB.
+- **Current usage:** the PNG decoder allocates nothing in PSRAM (this board
+  has none usable — see the correction note above). The dog PNGs are 256-color
+  palette images (color type 3, PLTE + tRNS); a palette source decodes to a
+  1 byte/pixel index buffer retained that way, plus the PLTE (768 B) and tRNS
+  (256 B) tables (~13.3 KB retained for 95x128). Peak decode working set is
+  ~25 KB (12.3 KB inflated raw + 12.2 KB indices live during the conversion
+  pass, +2×~95 B row buffers; the ~3.8 KB compressed IDAT is released right
+  after inflate + Adler-32), which fits the ~100 KB internal heap still free
+  after Wi-Fi (largest block ~107 KB). Reason the assets are palettes:
+  non-palette 95×128 RGBA outfits need a ~104 KB working set, which does not
+  fit the internal heap after Wi-Fi initialization (the 2026-11-22 "dog out
+  of memory" diagnosis — README, "Dog outfit images").
 - **Guideline for future code:** internal RAM is the scarce, fast resource —
   Wi-Fi, networking, DMA and other time-sensitive allocations must keep
   working there; PSRAM is slower than internal RAM, so allocation placement
@@ -258,19 +278,23 @@ All custom text on the CYD goes through LovyanGFX's **BFF** format (4bpp alpha, 
 
 ## SD card PNG pipeline (decode + composite + wiring)
 
-The weather app's dog outfits are 17 RGBA PNGs on the SD card root (selection chart in
-`README.md`). The machinery below is what any CYD project blitting SD-card
+The weather app's dog outfits are 17 palette PNGs (color type 3, PLTE + tRNS)
+on the SD card root (selection chart in `README.md`). The machinery below is what any CYD project blitting SD-card
 PNGs needs (`src/dog_image.cpp`; verified pixel-exact by `test/test_decoder.py`):
 
 - **Decode pipeline** (`src/dog_image.cpp`): PNG chunk walk (IHDR/PLTE/IDAT/IEND)
   → strip 2-byte zlib header → `puff()` inflate → verify Adler-32 → scanline
-  unfilter (None/Sub/Up/Average/Paeth) → **natural RGB565 + per-pixel alpha**
-  buffers. Color types 0, 2, 3, 6 supported; interlaced PNGs rejected. Images
-  larger than the 96x128 corner zone are area-averaged down to fit (all outfits
-  are exactly 95x128 → no scaling). Memory placement (2026-11-22): retained
-  buffers (natural RGB565 ~24 KB + alpha ~12 KB) live in internal RAM; the
-  transient decode buffers (compressed `idat` ~18 KB, inflated `raw` ~48 KB)
-  are allocated PSRAM-first with internal fallback — see "Memory".
+  unfilter (None/Sub/Up/Average/Paeth) → **palette sources: 1 byte/pixel index
+  buffers (+PLTE/tRNS tables, alpha = tRNS lookup, index at/beyond tRNS length
+  = opaque); other sources (grey/RGB/RGBA): natural RGB565 + per-pixel alpha
+  buffers**. Color types 0, 2, 3, 6 supported; interlaced PNGs rejected; a
+  palette source larger than the 96x128 corner zone is expanded to RGB565+alpha
+  first. Images larger than the zone are then area-averaged down to fit (all
+  outfits are exactly 95x128 → no scaling). Memory (2026-11-22, part 2 — no
+  usable PSRAM on this board): everything lives in internal RAM; the peak
+  working set is ~25 KB for palette outfits (12.3 KB raw + 12.2 KB indices
+  during the conversion pass, +2×~95 B rows; ~3.8 KB `idat` released after
+  inflate+Adler) vs ~104 KB for non-palette 95×128 RGBA — see "Memory".
 - **Chunk-type comparison — hard-learned (2026-11-20, cost a whole debug session)**:
   PNG chunk types are fixed 4-byte fields, NOT C strings. The decoder must use
   `memcmp(type, "IHDR", 4)` etc. The decoder had carried

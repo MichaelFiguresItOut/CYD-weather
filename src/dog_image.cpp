@@ -3,15 +3,21 @@
 //
 //  Reads an explicitly named file from the SD card root, decodes it (PNG chunks
 //  + DEFLATE via Mark Adler's public-domain puff.c in lib/puff) and keeps the
-//  result as natural RGB565 + per-pixel alpha in heap buffers. main.cpp picks
-//  one of the weather-outfit files (see selectDogImage() there) and reloads on
-//  every change; compositeRow() does the alpha blend + panel transforms at draw time.
+//  result in heap buffers: natural RGB565 + per-pixel alpha for grayscale/
+//  RGB/RGBA sources, palette indices + PLTE/tRNS tables for palette sources
+//  (the dog assets). main.cpp picks one of the weather-outfit files (see
+//  selectDogImage() there) and reloads on every change; compositeRow() does
+//  the alpha blend + panel transforms at draw time.
 //
-//  Memory: the decoded image (RGB565 + alpha) is retained in internal RAM. The
-//  two transient decode buffers (compressed idat ~18 KB, inflated raw ~48 KB)
-//  are allocated in PSRAM first, falling back to internal RAM - after the Wi-Fi
-//  driver and mbedTLS have claimed their share, the ~104 KB decode working set
-//  no longer fits in the internal DMA heap in one go (see loadDogImage).
+//  Memory: this board has no usable PSRAM (the CYD's QSPI PSRAM fails its ID
+//  read), so everything is internal RAM. The dog assets are 256-color palette
+//  PNGs; a palette image decodes straight to 1 byte/pixel indices and is
+//  retained that way. Peak decode working set for the 95x128 assets is ~25 KB
+//  (12.3 KB inflated raw + 12.2 KB index buffer live at once during the
+//  conversion pass, plus 2 x ~95 B row buffers; the ~3.8 KB compressed IDAT is
+//  released right after inflate + Adler-32). That fits the ~100 KB of internal
+//  heap still free after the Wi-Fi driver and mbedTLS have claimed their
+//  share - the pre-palette ~104 KB RGBA working set did not (see loadDogImage).
 //
 //  PNG support: non-interlaced, 8-bit samples, color types 0/2/3/6.
 //  IDAT integrity is checked with the Adler-32 of the zlib wrapper; per-chunk
@@ -33,8 +39,19 @@ extern "C" int puff(unsigned char *dest, unsigned long *destlen,
 static const int kMaxW = 96;    // keeps a >=220 px text zone for size-2 lines
 static const int kMaxH = 128;   // full native height (rows [108,236))
 
-static uint16_t* g_rgb   = nullptr;   // natural RGB565 pixels (heap)
-static uint8_t*  g_alpha = nullptr;   // per-pixel alpha 0..255 (heap)
+// Retained image - two layouts, chosen at load time:
+//  - palette mode (the dog assets, color type 3): g_idx holds 1 byte/pixel
+//    indices into g_pal (PLTE); per-pixel alpha comes from g_trns (tRNS) -
+//    an index at or beyond g_trnsLen is opaque (alpha 255) per the PNG spec.
+//  - RGB565 mode (grayscale / RGB / RGBA sources, kept for robustness):
+//    g_rgb + g_alpha as before.
+static uint8_t*  g_idx    = nullptr;   // palette mode: w*h palette indices (heap)
+static uint16_t* g_rgb    = nullptr;   // RGB565 mode: natural RGB565 pixels (heap)
+static uint8_t*  g_alpha  = nullptr;   // RGB565 mode: per-pixel alpha 0..255 (heap)
+static uint8_t   g_pal[768];           // palette mode: PLTE RGB triples (static)
+static uint8_t   g_trns[256];          // palette mode: per-index alpha (static)
+static uint16_t  g_palCount = 0, g_trnsLen = 0;   // up to 256; uint8_t would wrap a full table to 0
+static bool      g_palette  = false;   // which retained layout is live
 static int       g_w     = 0;
 static int       g_h     = 0;
 static char      g_name[48] = "";
@@ -150,44 +167,21 @@ bool skip(File& f, size_t n) {
 }
 
 // ---------------------------------------------------------------------------
-//  PSRAM-first allocation for the transient decode buffers (idat, raw).
-//  Plain free() == heap_caps_free(), so it correctly releases a block from
-//  either pool - the existing free sites need no changes.
+//  Heap diagnostics. This board has no usable PSRAM (the CYD's QSPI PSRAM
+//  fails its ID read), so all decode buffers are plain internal-RAM
+//  allocations; the decoder is sized to fit them (see the file header).
 // ---------------------------------------------------------------------------
-
-static constexpr uint32_t kPsramCaps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
 
 // Once per boot: report what is actually available before the first decode.
 void reportHeapsOnce() {
   static bool done = false;
   if (done) return;
   done = true;
-  multi_heap_info_t spi, dma;
-  heap_caps_get_info(&spi, kPsramCaps);
-  heap_caps_get_info(&dma, MALLOC_CAP_DMA);
-  Serial.printf("[DOG] heap: PSRAM %s (free %u KB, largest block %u KB), "
-                "internal free %lu KB (largest block %u KB)\n",
-                psramFound() ? "detected" : "NOT detected",
-                (unsigned)(spi.total_free_bytes / 1024), (unsigned)(spi.largest_free_block / 1024),
-                (unsigned long)(ESP.getFreeHeap() / 1024), (unsigned)(dma.largest_free_block / 1024));
-}
-
-// Allocate n bytes: PSRAM first, internal heap if PSRAM is missing/full.
-uint8_t* psMallocFirst(size_t n) {
-  uint8_t* p = (uint8_t*)heap_caps_malloc(n, kPsramCaps);
-  return p ? p : (uint8_t*)malloc(n);
-}
-
-// Grow a buffer (preserving contents) with the same preference. On failure the
-// original buffer stays valid, so the caller can free() it unchanged.
-// (heap_caps_realloc may move a block between the PSRAM and internal heaps and
-// reports the new pointer - see esp_heap_caps.h.)
-uint8_t* psReallocFirst(uint8_t* p, size_t n) {
-  uint8_t* np = (uint8_t*)heap_caps_realloc(p, n, kPsramCaps);
-  if (np) return np;
-  np = (uint8_t*)realloc(p, n);   // internal fallback
-  if (np) return np;
-  return nullptr;   // p unchanged
+  multi_heap_info_t info;
+  heap_caps_get_info(&info, MALLOC_CAP_8BIT);
+  Serial.printf("[DOG] heap: internal free %lu KB (largest block %u KB)\n",
+                (unsigned long)(ESP.getFreeHeap() / 1024),
+                (unsigned)(info.largest_free_block / 1024));
 }
 
 }   // namespace
@@ -195,8 +189,10 @@ uint8_t* psReallocFirst(uint8_t* p, size_t n) {
 // Load one outfit file from the SD card root (e.g. "rain_now.png"). Frees any
 // previously decoded image first, so a failed load leaves a clean empty state.
 bool loadDogImage(const char* path) {
+  free(g_idx);   g_idx = nullptr;
   free(g_rgb);   g_rgb = nullptr;
   free(g_alpha); g_alpha = nullptr;
+  g_palette = false;
   g_w = g_h = 0;
   g_name[0] = '\0';
 
@@ -215,7 +211,9 @@ bool loadDogImage(const char* path) {
   if (!ok) { f.close(); Serial.println("[DOG] not a PNG file"); return false; }
 
   PngInfo info;
-  uint8_t palette[768]; bool havePalette = false;
+  uint8_t palette[768]; int palCount = 0;
+  uint8_t trns[256];    // palette transparency: per-index alpha, length trnsLen
+  int trnsLen = 0;
   uint8_t* idat = nullptr; size_t idatLen = 0, idatCap = 0;
   bool iend = false;
 
@@ -249,10 +247,16 @@ bool loadDogImage(const char* path) {
     } else if (memcmp(type, "PLTE", 4) == 0) {
       if (len > sizeof(palette)) { ok = false; Serial.println("[DOG] palette too large"); break; }
       if (!readFull(f, palette, len)) { ok = false; Serial.println("[DOG] read error in PLTE"); break; }
-      havePalette = true;
+      palCount = (int)(len / 3);
+    } else if (memcmp(type, "tRNS", 4) == 0) {
+      // Per-index alpha for palette images: up to 256 one-byte values; an
+      // index at or beyond the table length is opaque (alpha 255).
+      if (len > sizeof(trns)) { ok = false; Serial.println("[DOG] tRNS too large"); break; }
+      if (!readFull(f, trns, len)) { ok = false; Serial.println("[DOG] read error in tRNS"); break; }
+      trnsLen = (int)len;
     } else if (memcmp(type, "IDAT", 4) == 0) {
       if (idatLen + len > idatCap) {
-        uint8_t* nb = psReallocFirst(idat, idatLen + len);      // exact growth
+        uint8_t* nb = (uint8_t*)realloc(idat, idatLen + len);   // exact growth
         if (!nb) {
           ok = false;
           Serial.printf("[DOG] %s: out of memory (idat buffer, %u KB)\n",
@@ -285,7 +289,7 @@ bool loadDogImage(const char* path) {
     if (why) Serial.printf("[DOG] /%s: %s\n", path, why);
     free(idat); return false;
   }
-  if (info.colorType == 3 && !havePalette) { free(idat); Serial.println("[DOG] palette PNG without PLTE"); return false; }
+  if (info.colorType == 3 && palCount == 0) { free(idat); Serial.println("[DOG] palette PNG without PLTE"); return false; }
 
   int bpp = (info.colorType == 2) ? 3 : (info.colorType == 6) ? 4 : 1;
   size_t rowBytes = (size_t)info.w * bpp + 1;      // + filter byte per scanline
@@ -304,7 +308,7 @@ bool loadDogImage(const char* path) {
     hasAdler = true;
   }
 
-  uint8_t* raw = psMallocFirst(rawSize);
+  uint8_t* raw = (uint8_t*)malloc(rawSize);
   if (!raw) {
     free(idat);
     Serial.printf("[DOG] /%s: out of memory (raw buffer, %u KB)\n",
@@ -330,19 +334,33 @@ bool loadDogImage(const char* path) {
   }
   if (!good && rc != 0) Serial.printf("[DOG] inflate failed (rc=%d)\n", rc);
 
+  if (good) {
+    // Inflate + Adler-32 are done: release the compressed IDAT now so it does
+    // not coexist with the decode buffers below (saves up to ~3.8 KB at peak).
+    free(idat); idat = nullptr; idatCap = 0;
+  }
+
   // ---------------------------------------------------------------------------
-  //  Unfilter scanlines and convert to RGB565 (natural colors for now).
+  //  Unfilter scanlines and convert. Palette sources decode straight to
+  //  1 byte/pixel indices (color and per-pixel alpha live in PLTE/tRNS);
+  //  other sources expand to natural RGB565 + per-pixel alpha.
   //  Two row buffers: cur is written in place (Sub/Paeth only read positions
   //  already written this row), prev holds the previous unfiltered row.
   // ---------------------------------------------------------------------------
-  uint16_t* img  = nullptr;   // natural RGB565
-  uint8_t*  alph = nullptr;   // per-pixel alpha (255 for non-RGBA images)
+  uint8_t*  idx  = nullptr;   // palette mode: 1 byte/pixel index
+  uint16_t* img  = nullptr;   // RGB565 mode: natural RGB565
+  uint8_t*  alph = nullptr;   // RGB565 mode: per-pixel alpha (255 for non-RGBA images)
   if (good) {
-    img  = (uint16_t*)malloc((size_t)info.w * info.h * sizeof(uint16_t));
-    alph = (uint8_t*)malloc((size_t)info.w * info.h);
-    if (!img || !alph) {
-      good = false;
-      if (!why) why = img ? "out of memory (alpha buffer)" : "out of memory (rgb buffer)";
+    if (info.colorType == 3) {
+      idx = (uint8_t*)malloc((size_t)info.w * info.h);
+      if (!idx) { good = false; if (!why) why = "out of memory (index buffer)"; }
+    } else {
+      img  = (uint16_t*)malloc((size_t)info.w * info.h * sizeof(uint16_t));
+      alph = (uint8_t*)malloc((size_t)info.w * info.h);
+      if (!img || !alph) {
+        good = false;
+        if (!why) why = img ? "out of memory (alpha buffer)" : "out of memory (rgb buffer)";
+      }
     }
   }
 
@@ -356,9 +374,8 @@ bool loadDogImage(const char* path) {
     }
   }
 
-  // Once per boot: internal-heap state at the decode peak - all transient
-  // buffers are live now (idat + raw in PSRAM, img/alpha/rows internal).
-  // This is the moment the pre-PSRAM code exhausted the internal DMA heap.
+  // Once per boot: internal-heap state at the decode peak - the transients
+  // are all live here (raw + index/rgb565 + rows; idat already released).
   if (good) {
     static bool peakReported = false;
     if (!peakReported) {
@@ -398,22 +415,27 @@ bool loadDogImage(const char* path) {
         }
       }
 
-      for (int x = 0; x < info.w && good; x++) {
-        uint8_t r, g, b2, al = 255;
-        if (info.colorType == 0) {
-          r = g = b2 = cur[x];
-        } else if (info.colorType == 3) {
-          int idx = cur[x];
-          if (idx >= 256) { good = false; if (!why) why = "bad palette index (corrupt IDAT?)"; break; }
-          r = palette[idx * 3]; g = palette[idx * 3 + 1]; b2 = palette[idx * 3 + 2];
-        } else if (info.colorType == 2) {
-          r = cur[x * 3]; g = cur[x * 3 + 1]; b2 = cur[x * 3 + 2];
-        } else {   // RGBA: keep natural color + alpha; composited at draw time
-          al = cur[x * 4 + 3];
-          r = cur[x * 4]; g = cur[x * 4 + 1]; b2 = cur[x * 4 + 2];
+      if (info.colorType == 3) {
+        // Keep the palette indices; PLTE + tRNS carry color and alpha.
+        for (int x = 0; x < info.w && good; x++) {
+          int i = cur[x];
+          if (i >= palCount) { good = false; if (!why) why = "bad palette index (corrupt IDAT?)"; break; }
+          idx[(size_t)y * info.w + x] = (uint8_t)i;
         }
-        img[(size_t)y * info.w + x]  = rgb565(r, g, b2);
-        alph[(size_t)y * info.w + x] = al;
+      } else {
+        for (int x = 0; x < info.w && good; x++) {
+          uint8_t r, g, b2, al = 255;
+          if (info.colorType == 0) {
+            r = g = b2 = cur[x];
+          } else if (info.colorType == 2) {
+            r = cur[x * 3]; g = cur[x * 3 + 1]; b2 = cur[x * 3 + 2];
+          } else {   // RGBA: keep natural color + alpha; composited at draw time
+            al = cur[x * 4 + 3];
+            r = cur[x * 4]; g = cur[x * 4 + 1]; b2 = cur[x * 4 + 2];
+          }
+          img[(size_t)y * info.w + x]  = rgb565(r, g, b2);
+          alph[(size_t)y * info.w + x] = al;
+        }
       }
 
       uint8_t* t = cur; cur = prev ? prev : rowB; prev = t;   // swap (first row: cur was A)
@@ -425,7 +447,7 @@ bool loadDogImage(const char* path) {
     // Named failure points above (Adler, inflate rc, OOM at scale-down) printed
     // themselves; explain the silent ones exactly once.
     if (why) Serial.printf("[DOG] /%s: %s\n", path, why);
-    free(raw); free(idat); free(img); free(alph);
+    free(raw); free(idat); free(idx); free(img); free(alph);
     return false;
   }
 
@@ -434,6 +456,26 @@ bool loadDogImage(const char* path) {
   //  applies inversion + byte swap per row at draw time, after blending alpha.
   // ---------------------------------------------------------------------------
   int fw = info.w, fh = info.h;
+  bool paletteMode = (info.colorType == 3);
+  if (paletteMode && (fw > kMaxW || fh > kMaxH)) {
+    // The current assets (95x128) never need downscaling; a palette source
+    // that did would be expanded to RGB565+alpha first, since the scalers
+    // work on that layout.
+    img  = (uint16_t*)malloc((size_t)fw * fh * sizeof(uint16_t));
+    alph = (uint8_t*)malloc((size_t)fw * fh);
+    if (!img || !alph) {
+      free(img); free(alph); free(raw); free(idat); free(idx);
+      Serial.printf("[DOG] /%s: out of memory (expand buffers)\n", path);
+      return false;
+    }
+    for (int i = 0; i < fw * fh; i++) {
+      int j = idx[i];
+      img[i]  = rgb565(palette[j * 3], palette[j * 3 + 1], palette[j * 3 + 2]);
+      alph[i] = (j < trnsLen) ? trns[j] : 255;
+    }
+    free(idx); idx = nullptr;
+    paletteMode = false;
+  }
   if (fw > kMaxW || fh > kMaxH) {
     float scale = fminf((float)kMaxW / fw, (float)kMaxH / fh);
     int dw = (int)(fw * scale + 0.5f); if (dw < 1) dw = 1;
@@ -451,12 +493,27 @@ bool loadDogImage(const char* path) {
   }
 
   free(raw); free(idat);
-  g_rgb   = img;
-  g_alpha = alph;
+  if (paletteMode) {
+    // Retain the palette representation: index buffer + PLTE/tRNS tables.
+    memcpy(g_pal, palette, (size_t)palCount * 3);
+    g_palCount = (uint16_t)palCount;
+    memcpy(g_trns, trns, (size_t)trnsLen);
+    g_trnsLen = (uint16_t)trnsLen;
+    g_idx = idx;
+    g_palette = true;
+  } else {
+    g_rgb   = img;
+    g_alpha = alph;
+    g_palette = false;
+  }
   g_w = fw; g_h = fh;
   snprintf(g_name, sizeof(g_name), "%s", path);
-  Serial.printf("[DOG] loaded /%s: %dx%d px, %u KB buffers\n",
-                path, fw, fh, (unsigned)(fw * fh * 3 / 1024));
+  // Retained footprint: palette mode = index buffer + PLTE/tRNS tables;
+  // RGB565 mode = rgb565 (2 B) + alpha (1 B) per pixel.
+  unsigned kb = g_palette
+      ? (unsigned)(((size_t)fw * fh + (size_t)palCount * 3 + (size_t)trnsLen + 512) / 1024)
+      : (unsigned)(fw * fh * 3 / 1024);
+  Serial.printf("[DOG] loaded /%s: %dx%d px, %u KB buffers\n", path, fw, fh, kb);
   return true;
 }
 
@@ -470,7 +527,30 @@ bool loadDogImage(const char* path) {
 //      the library swaps it back to native, the panel inverts it, and the
 //      result is the natural color.
 void compositeRow(int y, uint8_t bgR, uint8_t bgG, uint8_t bgB, uint16_t* out) {
-  if (!g_rgb || !g_alpha || y < 0 || y >= g_h) return;
+  if (y < 0 || y >= g_h) return;
+
+  if (g_palette) {
+    // Palette mode: per-pixel PLTE + tRNS lookup, then the same blend and
+    // panel transforms as RGB565 mode. An index at or beyond the tRNS table
+    // length is opaque (alpha 255) per the PNG spec.
+    if (!g_idx) return;
+    const uint8_t* ix = g_idx + (size_t)y * g_w;
+    for (int x = 0; x < g_w; x++) {
+      uint8_t i = ix[x];
+      uint8_t r = g_pal[i * 3];
+      uint8_t g = g_pal[i * 3 + 1];
+      uint8_t b = g_pal[i * 3 + 2];
+      int a = (i < g_trnsLen) ? g_trns[i] : 255;
+      r = (uint8_t)((r * a + bgR * (255 - a)) / 255);
+      g = (uint8_t)((g * a + bgG * (255 - a)) / 255);
+      b = (uint8_t)((b * a + bgB * (255 - a)) / 255);
+      uint16_t v = ~rgb565(r, g, b);
+      out[x] = (uint16_t)((v << 8) | (v >> 8));
+    }
+    return;
+  }
+
+  if (!g_rgb || !g_alpha) return;
   const uint16_t* px = g_rgb + (size_t)y * g_w;
   const uint8_t* al = g_alpha + (size_t)y * g_w;
   for (int x = 0; x < g_w; x++) {
@@ -489,13 +569,21 @@ void compositeRow(int y, uint8_t bgR, uint8_t bgG, uint8_t bgB, uint16_t* out) {
 }
 
 bool dogRowSpan(int y, int& x0, int& x1) {
-  if (!g_alpha || y < 0 || y >= g_h) return false;
-  const uint8_t* al = g_alpha + (size_t)y * g_w;
-  int a = 0;
-  while (a < g_w && al[a] == 0) a++;
-  if (a >= g_w) return false;
-  int b = g_w - 1;
-  while (b >= 0 && al[b] == 0) b--;
+  if (y < 0 || y >= g_h) return false;
+  int a = 0, b = g_w - 1;
+  if (g_palette) {
+    if (!g_idx) return false;
+    const uint8_t* ix = g_idx + (size_t)y * g_w;
+    auto alphaOf = [&](int i) -> int { return (i < g_trnsLen) ? g_trns[i] : 255; };
+    while (a < g_w && alphaOf(ix[a]) == 0) a++;
+    while (b > a && alphaOf(ix[b]) == 0) b--;
+  } else {
+    if (!g_rgb || !g_alpha) return false;
+    const uint8_t* al = g_alpha + (size_t)y * g_w;
+    while (a < g_w && al[a] == 0) a++;
+    while (b > a && al[b] == 0) b--;
+  }
+  if (a > b) return false;
   x0 = a;
   x1 = b;
   return true;

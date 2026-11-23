@@ -2,7 +2,8 @@
 //  Dog outfit image (bottom-right corner of the dashboard)
 //
 //  Decodes a PNG from the SD card and keeps it in natural-RGB565 + alpha
-//  buffers. main.cpp picks one of the weather-outfit files at the root of the
+//  buffers (palette images: 1 byte/pixel palette indices + PLTE/tRNS tables).
+//  main.cpp picks one of the weather-outfit files at the root of the
 //  card (see selectDogImage() there) and calls loadDogImage() with an explicit
 //  filename whenever the selection changes.
 //
