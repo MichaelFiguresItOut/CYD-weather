@@ -17,8 +17,11 @@
 //                     backup ids). Validated on load — a blob that does not
 //                     parse exactly (e.g. an interrupted save) is treated
 //                     as an EMPTY slot.
-//    "active"    int  index of the profile the current location belongs
-//                     to, or -1 (no association).
+//    "active"    int  persisted hint for which profile the current
+//                     location belongs to, or -1 (no association).
+//                     profileActive() derives the answer from the
+//                     location itself (see below); this only breaks a
+//                     tie between profiles holding the same location.
 //
 //  Association semantics (kept in sync by the settings flows):
 //    - SAVE CURRENT            -> the new slot becomes active.
@@ -30,6 +33,11 @@
 //      profiles are kept, the location is simply unsaved).
 //    - SCAN (station selection, or a scan that clears the selection) ->
 //      the active profile's station configuration is updated in place.
+//    The active marker is location-derived: profileActive() returns the
+//    profile whose stored location (coordinates + place name) equals the
+//    current one, so the highlight survives a reboot and reappears
+//    whenever the current location is a saved one, even when the
+//    persisted association was dropped or never written.
 //
 //  The timezone is NEVER stored in a profile: it is automatic only and is
 //  re-resolved from the restored coordinates on the next weather fetch
@@ -66,7 +74,7 @@ void profileLoad();
 
 int  profileCount();                         // number of used slots
 const LocationProfile* profileGet(int i);    // slot, or NULL when unused
-int  profileActive();                        // active slot index, or -1
+int  profileActive();                        // profile matching the current location, or -1
 bool profileNameTaken(const char* name);     // case-insensitive name match
 
 // Save the current location + station configuration as a new profile

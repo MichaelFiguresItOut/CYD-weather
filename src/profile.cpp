@@ -34,6 +34,17 @@ int profActive = -1;    // -1 = no association
 
 void profSlotKey(int i, char* key, size_t n) { snprintf(key, n, "p%d", i); }
 
+// Copy a parsed/source field into a fixed-size destination, NUL-terminated
+// (truncating if ever too long; real values are far shorter). A plain
+// snprintf "%s" copy trips -Wformat-truncation on the oversized source
+// buffers.
+void copyField(char* dst, size_t n, const char* src) {
+  size_t l = strlen(src);
+  if (l >= n) l = n - 1;
+  memcpy(dst, src, l);
+  dst[l] = 0;
+}
+
 int serialize(const LocationProfile* p, char* buf, size_t len) {
   return snprintf(buf, len, "%s|%s|%s|%.6f|%.6f|%s|%s|%.2f|%s|%s|%s|%s",
                   p->name, p->postalCode, p->placeName,
@@ -73,17 +84,17 @@ bool parse(const char* s, LocationProfile* p) {
   if (!isfinite(dist) || dist < 0.0) return false;
 
   memset(p, 0, sizeof(*p));
-  snprintf(p->name, sizeof(p->name), "%s", f[0]);
-  snprintf(p->postalCode, sizeof(p->postalCode), "%s", f[1]);
-  snprintf(p->placeName, sizeof(p->placeName), "%s", f[2]);
+  copyField(p->name, sizeof(p->name), f[0]);
+  copyField(p->postalCode, sizeof(p->postalCode), f[1]);
+  copyField(p->placeName, sizeof(p->placeName), f[2]);
   p->lat = (float)lat;
   p->lon = (float)lon;
-  snprintf(p->nwsStationId, sizeof(p->nwsStationId), "%s", f[5]);
-  snprintf(p->nwsStationName, sizeof(p->nwsStationName), "%s", f[6]);
+  copyField(p->nwsStationId, sizeof(p->nwsStationId), f[5]);
+  copyField(p->nwsStationName, sizeof(p->nwsStationName), f[6]);
   p->nwsStationDistKm = (float)dist;
-  snprintf(p->nwsStationProvider, sizeof(p->nwsStationProvider), "%s", f[8]);
+  copyField(p->nwsStationProvider, sizeof(p->nwsStationProvider), f[8]);
   for (int k = 0; k < NWS_BACKUP_MAX; k++)
-    snprintf(p->nwsStationBackup[k], sizeof(p->nwsStationBackup[k]), "%s", f[9 + k]);
+    copyField(p->nwsStationBackup[k], sizeof(p->nwsStationBackup[k]), f[9 + k]);
   return true;
 }
 
@@ -123,10 +134,12 @@ void copyStationsTo(LocationProfile* p) {
     snprintf(p->nwsStationBackup[k], sizeof(p->nwsStationBackup[k]), "%s", userSettings.nwsStationBackup[k]);
 }
 
-// Exact-match test used only to validate a loaded "active" association.
+// Same-place test: coordinates + resolved place name. The postal code
+// is deliberately excluded — the same place can be entered under
+// different codes (or none). Used to validate a loaded "active"
+// association and to derive the active profile from the current location.
 bool profileMatchesCurrent(const LocationProfile* p) {
   return p->lat == userSettings.lat && p->lon == userSettings.lon &&
-         strcmp(p->postalCode, userSettings.postalCode) == 0 &&
          strcmp(p->placeName, userSettings.placeName) == 0;
 }
 
@@ -174,7 +187,21 @@ const LocationProfile* profileGet(int i) {
   return &profs[i];
 }
 
-int profileActive() { return profActive; }
+int profileActive() {
+  // The current location is the ground truth for the active marker: the
+  // persisted association wins only while it still points at a matching
+  // profile, otherwise the first profile whose stored location is the
+  // current one is active (the persisted index only breaks a tie between
+  // profiles holding the same location).
+  if (userSettings.locationMode == SettingMode::UNCONFIGURED) return -1;
+  if (profActive >= 0 && profActive < PROFILE_MAX &&
+      profs[profActive].name[0] && profileMatchesCurrent(&profs[profActive]))
+    return profActive;
+  for (int i = 0; i < PROFILE_MAX; i++)
+    if (profs[i].name[0] && profileMatchesCurrent(&profs[i]))
+      return i;
+  return -1;
+}
 
 bool profileNameTaken(const char* name) {
   if (!name || !name[0]) return false;
@@ -197,8 +224,10 @@ int profileSaveCurrent(const char* name) {
   snprintf(profs[slot].name, sizeof(profs[slot].name), "%s", name);
   profs[slot].lat = userSettings.lat;
   profs[slot].lon = userSettings.lon;
-  snprintf(profs[slot].postalCode, sizeof(profs[slot].postalCode), "%s", userSettings.postalCode);
-  snprintf(profs[slot].placeName, sizeof(profs[slot].placeName), "%s", userSettings.placeName);
+  copyField(profs[slot].postalCode, sizeof(profs[slot].postalCode),
+            userSettings.postalCode);
+  copyField(profs[slot].placeName, sizeof(profs[slot].placeName),
+            userSettings.placeName);
   copyStationsTo(&profs[slot]);
 
   if (!persistSlot(slot)) {          // interrupted save: slot stays empty
@@ -262,10 +291,13 @@ void profileClearActive() {
 }
 
 void profileSyncStations() {
-  if (profActive < 0) return;
-  LocationProfile* p = &profs[profActive];
+  // Use the derived active (location is the ground truth, so a sync
+  // happens even when the persisted association was dropped).
+  int i = profileActive();
+  if (i < 0) return;
+  LocationProfile* p = &profs[i];
   copyStationsTo(p);
-  if (!persistSlot(profActive))
+  if (!persistSlot(i))
     Serial.println("[PROF] station sync save failed");
   else
     Serial.printf("[PROF] stations synced to \"%s\" (stn=%s)\n", p->name, p->nwsStationId);

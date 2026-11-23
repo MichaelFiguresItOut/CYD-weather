@@ -509,9 +509,11 @@ void drawWeather() {
 // button): SAVE CURRENT stores the current location + station
 // configuration under a name (up to 12 chars); each saved profile row has
 // a RESTORE button (left 75 %) and a red CLEAR button (right 25 %);
-// unused slots show EMPTY. The active profile (the one the current
-// location is associated with) is marked with the accent bar at the row's
-// left edge.
+// unused slots show EMPTY. The active profile — the one whose stored
+// location equals the current location — is the row whose RESTORE side
+// is on the yellow accent background (the red CLEAR box is unchanged).
+// When all slots are used, SAVE CURRENT does not open the keyboard —
+// the page shows the large (size 2) result line instead.
 void drawSaveLoc() {
   tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
   drawHeader("SAVE LOCATIONS", false);
@@ -533,17 +535,21 @@ void drawSaveLoc() {
       tft.drawString("EMPTY", ROW_X + ROW_W / 2, y + SL_BTN_H / 2 + 1);
       continue;
     }
-    // RESTORE: NAME (left 75 %)
+    // RESTORE: NAME (left 75 %): the active profile is the yellow accent
+    // row; the other rows are white (selection highlight when focused).
+    const bool isActive = (active == i);
+    tft.fillRoundRect(ROW_X, y, SL_LEFT_W, SL_BTN_H, 6,
+                      isActive ? colBtnBg
+                               : (sGrid == 1 + i ? colRowSel : colRowBg));
+    tft.drawRoundRect(ROW_X, y, SL_LEFT_W, SL_BTN_H, 6,
+                      isActive ? colBtnBd : colRowBd);
     char lab[24];
     snprintf(lab, sizeof(lab), "RESTORE: %s", p->name);
-    tft.fillRoundRect(ROW_X, y, SL_LEFT_W, SL_BTN_H, 6,
-                      sGrid == 1 + i ? colRowSel : colRowBg);
-    tft.drawRoundRect(ROW_X, y, SL_LEFT_W, SL_BTN_H, 6, colRowBd);
     tft.setTextDatum(MC_DATUM);
     tft.setTextSize(1);
-    tft.setTextColor(colText);
+    tft.setTextColor(isActive ? colBtnTxt : colText);
     tft.drawString(lab, ROW_X + SL_LEFT_W / 2, y + SL_BTN_H / 2 + 1);
-    // CLEAR (right 25 %)
+    // CLEAR (right 25 %) — always a red box, on the active row too.
     tft.fillRoundRect(ROW_X + SL_LEFT_W, y, ROW_W - SL_LEFT_W, SL_BTN_H, 6,
                       colDanger);
     tft.drawRoundRect(ROW_X + SL_LEFT_W, y, ROW_W - SL_LEFT_W, SL_BTN_H, 6,
@@ -553,16 +559,29 @@ void drawSaveLoc() {
     tft.setTextColor(C(0xFF, 0xFF, 0xFF));
     tft.drawString("CLEAR", ROW_X + SL_LEFT_W + (ROW_W - SL_LEFT_W) / 2,
                    y + SL_BTN_H / 2 + 1);
-    // Active-profile marker: the accent bar at the row's left edge.
-    if (active == i)
-      tft.fillRect(ROW_X - 3, y + 4, 3, SL_BTN_H - 8, colBtnBg);
   }
 
+  // Result line: size 2, warn-colored on errors; a message that does not
+  // fit at size 2 is split into two centered lines at the space nearest
+  // the middle (the NO FREE SLOTS message).
   if (profMsg[0]) {
-    tft.setTextDatum(TL_DATUM);
-    tft.setTextSize(1);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextSize(2);
     tft.setTextColor(profMsgGood ? colBgTxt : colWarn);
-    tft.drawString(profMsg, ROW_X + 10, 184);
+    if (txtW(profMsg, 2) <= 300) {
+      tft.drawString(profMsg, 160, 202);
+    } else {
+      const int n = (int)strlen(profMsg);
+      int sp = -1;
+      for (int i = n / 2; i > 0; i--)
+        if (profMsg[i] == ' ') { sp = i; break; }
+      if (sp < 0) sp = n / 2;
+      char l1[48], l2[48];
+      snprintf(l1, sizeof(l1), "%.*s", sp, profMsg);
+      snprintf(l2, sizeof(l2), "%s", profMsg + sp + 1);
+      tft.drawString(l1, 160, 190);
+      tft.drawString(l2, 160, 208);
+    }
   }
   drawFooter("RESTORE APPLIES LOCATION + STATIONS");
 }
@@ -1551,6 +1570,13 @@ void applyLocation(int i) {
 // result line (name required / duplicate / capacity / save failure).
 void saveCurrentProfile() {
   profMsg[0] = 0;
+  if (profileCount() >= PROFILE_MAX) {
+    // All slots in use: do not open the keyboard — there is nowhere to
+    // save. The page shows the large (size 2, two lines) result line.
+    snprintf(profMsg, sizeof(profMsg), "NO FREE SLOTS - CLEAR A SAVED LOCATION");
+    draw();
+    return;
+  }
   if (userSettings.locationMode == SettingMode::UNCONFIGURED) {
     snprintf(profMsg, sizeof(profMsg), "SET A LOCATION FIRST");
     draw();
@@ -1579,7 +1605,8 @@ void saveCurrentProfile() {
       snprintf(profMsg, sizeof(profMsg), "SAVED: %s", name);
       profMsgGood = true;
     } else if (r == -2) {
-      snprintf(profMsg, sizeof(profMsg), "NO FREE SLOTS");
+      // Unreachable (capacity is pre-checked above); keep in sync.
+      snprintf(profMsg, sizeof(profMsg), "NO FREE SLOTS - CLEAR A SAVED LOCATION");
     } else {
       snprintf(profMsg, sizeof(profMsg), "SAVE FAILED - RETRY");
     }
