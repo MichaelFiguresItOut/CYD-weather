@@ -59,6 +59,7 @@
 #include "time_util.h"   // ntpIsSynced()
 #include "weather.h"
 #include "profile.h"
+#include "led_status.h"
 
 namespace {
 
@@ -1008,6 +1009,7 @@ int stnAutoSelect(StnProg prog) {
 // haven't been checked yet (up to STN_PER_PAGE requests), then show the
 // results. Runs on entry to the page and on every page turn.
 void stnCheckPage() {
+  ledActivityBegin();   // observation-quality checks are network calls
   stnPhase = STN_SEARCHING;
   const int first = stnPage * STN_PER_PAGE;
   const int last  = (first + STN_PER_PAGE < stnCount) ? first + STN_PER_PAGE : stnCount;
@@ -1020,9 +1022,10 @@ void stnCheckPage() {
   }
   stnPhase = STN_RESULTS;
   draw();
+  ledActivityEnd();
 }
 
-void stnDiscover() {
+void stnDiscoverRun() {   // renamed: wrapped by stnDiscover() below
   stnReset();
   stnPhase = STN_SEARCHING;
   if (!wifiEnabled()) {
@@ -1094,7 +1097,15 @@ void stnDiscover() {
   if (stnAutoSelect(STNPROG_SCAN) < 0)
     Serial.println("[STN] scan: no suitable station, selection untouched");
   stnPage = 0;
-  stnCheckPage();                       // -> results
+  stnCheckPage();                       // -> results (nested activity)
+}
+
+// Manual STATION SCAN: one busy activity over the whole discovery (points
+// lookup, station list, observation-quality checks).
+void stnDiscover() {
+  ledActivityBegin();
+  stnDiscoverRun();
+  ledActivityEnd();
 }
 
 // The scan definitively found no stations for the current location
@@ -1254,6 +1265,10 @@ void backToPicker() {
 }
 
 void scanNetworks() {
+  // One activity over scan + reconnect: the LED stays blue the whole time
+  // and only settles (green/red) after the connection state is known.
+  ledActivityBegin();
+  ledAdvisoryOff();   // a new scan replaces any previous failure warning
   scanPage = 0;
   scanning = true;
   setStatus("");
@@ -1273,6 +1288,7 @@ void scanNetworks() {
   bool up = wifiConnectTo(c.ssid, c.pass);
   setStatus(up ? "CONNECTED" : "OFFLINE");
   draw();
+  ledActivityEnd();
 }
 
 // Join nets[i]; password via the QWERTY keyboard when the network is
@@ -1292,6 +1308,7 @@ void joinNet(int i) {
   setStatus("JOINING...");
   draw();
   delay(50);
+  ledActivityBegin();   // the join attempt (keyboard entry above stays green/red)
   if (wifiConnectTo(nets[i].ssid, pass)) {
     wifiSaveCredentials(nets[i].ssid, pass);
     snprintf(savedSsid, sizeof(savedSsid), "%.31s", nets[i].ssid);
@@ -1299,10 +1316,13 @@ void joinNet(int i) {
     page = PAGE_WIFI;
     sGrid = 1;      // highlight the SCAN NETWORKS row (row 0 is status only)
     draw();
+    ledAdvisoryOff();
   } else {
     setStatus("FAILED");
     draw();
+    ledAdvisoryOn();   // keep red while the failure line is on screen
   }
+  ledActivityEnd();
 }
 
 // Manual entry (ADD NETWORK row): type an SSID, then a password. ENTER
@@ -1325,16 +1345,20 @@ void addNet() {
   setStatus("JOINING...");
   draw();
   delay(50);
+  ledActivityBegin();   // the join attempt (keyboard entry above stays green/red)
   if (wifiConnectTo(ssid, pass)) {
     wifiSaveCredentials(ssid, pass);
     snprintf(savedSsid, sizeof(savedSsid), "%.31s", ssid);
     setStatus("CONNECTED");
     sGrid = 1;
     draw();
+    ledAdvisoryOff();
   } else {
     setStatus("FAILED");
     draw();
+    ledAdvisoryOn();   // keep red while the failure line is on screen
   }
+  ledActivityEnd();
 }
 
 // WIFI ON/OFF row: off kills the radio (the main loop's auto-reconnect is
@@ -1349,8 +1373,13 @@ void toggleRadio() {
     setStatus("JOINING...");
     draw();
     delay(50);
-    setStatus(wifiConnectTo(c.ssid, c.pass) ? "CONNECTED" : "FAILED");
+    ledActivityBegin();
+    const bool up = wifiConnectTo(c.ssid, c.pass);
+    setStatus(up ? "CONNECTED" : "FAILED");
     draw();
+    ledActivityEnd();
+    if (up) ledAdvisoryOff();
+    else    ledAdvisoryOn();   // keep red while the failure line is on screen
   }
 }
 
@@ -1378,7 +1407,13 @@ void doWifiReset() {
     setStatus("JOINING...");
     draw();
     delay(50);
-    setStatus(wifiConnectTo(WIFI_SSID, WIFI_PASS) ? "CONNECTED" : "FAILED");
+    ledActivityBegin();
+    const bool up = wifiConnectTo(WIFI_SSID, WIFI_PASS);
+    setStatus(up ? "CONNECTED" : "FAILED");
+    draw();
+    ledActivityEnd();
+    if (up) ledAdvisoryOff();
+    else    ledAdvisoryOn();   // keep red while the failure line is on screen
   }
   page = PAGE_WIFI;
   sGrid = 1;
@@ -1434,6 +1469,7 @@ void editLocation() {
   // The ADD LOCATION page stays up through the whole lookup: searching
   // status first, then the results (or a terminal message) on the same
   // screen. The header's "< BACK" is the escape hatch at any point.
+  ledAdvisoryOff();   // a new lookup replaces any previous failure message
   setStatus("");
   page = PAGE_POSTAL;
   sGrid = 0;
@@ -1443,6 +1479,9 @@ void editLocation() {
   snprintf(postalMsg, sizeof(postalMsg), "LOOKING UP ON OPEN-METEO...");
   draw();
   delay(50);
+  // One activity over both lookups (Open-Meteo + Nominatim fallback): no
+  // green flash between the services or before the result message.
+  ledActivityBegin();
   int nRes = geocodePostalOpenMeteo(query, geoResults, GEO_LIST_MAX);
   if (nRes == 0) {
     // Definite no-match — usually an international code or a city+state
@@ -1456,13 +1495,17 @@ void editLocation() {
   if (nRes > 0) {
     geoCount = nRes;
     postalPhase = PP_RESULTS;
+    ledAdvisoryOff();
   } else if (nRes < 0) {
     postalPhase = PP_MSG;
     snprintf(postalMsg, sizeof(postalMsg), "LOOKUP FAILED - RETRY");
+    ledAdvisoryOn();   // keep red while the message stays on the page
   } else {
     postalPhase = PP_MSG;
     snprintf(postalMsg, sizeof(postalMsg), "NO MATCH FOR %.23s", code);
+    ledAdvisoryOn();   // keep red while the message stays on the page
   }
+  ledActivityEnd();
   draw();
 }
 
@@ -1572,6 +1615,9 @@ void autoDiscoverStations() {
 // the weather for the new location.
 void applyLocation(int i) {
   if (i < 0 || i >= geoCount) return;
+  // One activity over the whole apply (station update + weather refetch):
+  // the status lines in between never flash the LED green.
+  ledActivityBegin();
   const GeoResult& g = geoResults[i];
   userSettings.lat = g.lat;
   userSettings.lon = g.lon;
@@ -1591,10 +1637,11 @@ void applyLocation(int i) {
   // stays on this page with the centered status lines, then applyLocation
   // continues with the weather refetch (which uses the new station chain).
   autoDiscoverStations();
-  fetchWeather();
+  fetchWeather();   // nested activity
   page = PAGE_WEATHER;
   sGrid = 0;
   draw();
+  ledActivityEnd();
 }
 
 // Phase 7 — SAVE CURRENT (SAVE LOCATIONS page): QWERTY entry of a profile
@@ -1604,11 +1651,13 @@ void applyLocation(int i) {
 // result line (name required / duplicate / capacity / save failure).
 void saveCurrentProfile() {
   profMsg[0] = 0;
+  ledAdvisoryOff();   // a new save attempt replaces the previous result line
   if (profileCount() >= PROFILE_MAX) {
     // All slots in use: do not open the keyboard — there is nowhere to
     // save. The page shows the large (size 2, two lines) result line.
     snprintf(profMsg, sizeof(profMsg), "NO FREE SLOTS - CLEAR A SAVED LOCATION");
     draw();
+    ledAdvisoryOn();   // keep red while the warning stays on the page
     return;
   }
   if (userSettings.locationMode == SettingMode::UNCONFIGURED) {
@@ -1634,15 +1683,19 @@ void saveCurrentProfile() {
   } else if (profileNameTaken(name)) {
     snprintf(profMsg, sizeof(profMsg), "NAME IS ALREADY IN USE");
   } else {
+    ledActivityBegin();   // the profile save itself (keyboard entry stays idle)
     const int r = profileSaveCurrent(name);
+    ledActivityEnd();
     if (r == 0) {
       snprintf(profMsg, sizeof(profMsg), "SAVED: %s", name);
       profMsgGood = true;
     } else if (r == -2) {
       // Unreachable (capacity is pre-checked above); keep in sync.
       snprintf(profMsg, sizeof(profMsg), "NO FREE SLOTS - CLEAR A SAVED LOCATION");
+      ledAdvisoryOn();   // keep red while the warning stays on the page
     } else {
       snprintf(profMsg, sizeof(profMsg), "SAVE FAILED - RETRY");
+      ledAdvisoryOn();   // keep red while the warning stays on the page
     }
   }
   draw();
@@ -1666,8 +1719,7 @@ void restoreStatus(const char* m, bool done, bool good) {
 // status line (same pattern as the ADD LOCATION status lines) so the
 // screen never looks frozen while the settings load and the weather
 // fetch runs.
-void restoreProfile(int i) {
-  if (!profileGet(i)) { draw(); return; }
+static void restoreProfileRun(int i) {   // renamed: wrapped by restoreProfile() below
   page = PAGE_RESTORE;
   sGrid = 0;
   restoreStatus("LOADING SAVED LOCATION...", false, false);
@@ -1704,6 +1756,14 @@ void restoreProfile(int i) {
   draw();
 }
 
+void restoreProfile(int i) {
+  if (!profileGet(i)) { draw(); return; }
+  // One activity over the restore (settings load + weather refetch).
+  ledActivityBegin();
+  restoreProfileRun(i);
+  ledActivityEnd();
+}
+
 // --- Touch routing -------------------------------------------------------
 
 // Row under y (0..4), -1 when outside the row band.
@@ -1732,12 +1792,14 @@ void handleTap(int16_t x, int16_t y) {
       case PAGE_MAIN:       backToPicker();      break;
       case PAGE_APPEARANCE:
       case PAGE_WEATHER:   page = PAGE_MAIN; sGrid = 0; draw(); break;
-      case PAGE_POSTAL:     page = PAGE_WEATHER; sGrid = 1; draw(); break;
+      case PAGE_POSTAL:     ledAdvisoryOff();   // dismiss the lookup message
+                            page = PAGE_WEATHER; sGrid = 1; draw(); break;
       case PAGE_STATIONS:   page = PAGE_MAIN;  sGrid = 3; draw(); break;
       case PAGE_STN_SCAN:   page = PAGE_STATIONS; sGrid = 2; draw(); break;
       case PAGE_SCAN:       page = PAGE_WIFI;  sGrid = 1; draw(); break;
       case PAGE_WIFI:       page = PAGE_MAIN;  sGrid = 2; draw(); break;
-      case PAGE_SAVELOC:    page = PAGE_WEATHER; sGrid = 2; draw(); break;
+      case PAGE_SAVELOC:    ledAdvisoryOff();   // dismiss the save result line
+                            page = PAGE_WEATHER; sGrid = 2; draw(); break;
       case PAGE_RESTORE:    page = PAGE_SAVELOC; sGrid = 0; draw(); break;
       case PAGE_CONFIRM: {   // BACK: nothing has been changed yet.
         int t = resetTarget;
@@ -1805,10 +1867,13 @@ void handleTap(int16_t x, int16_t y) {
             doWifiReset();    // sets page + sGrid, draws itself
             break;
           case RT_PROFILE:    // Phase 7: erase the confirmed profile slot.
+            ledActivityBegin();
             profileClear(profClearIdx);
+            ledActivityEnd();
             profClearIdx = -1;
             snprintf(profMsg, sizeof(profMsg), "PROFILE CLEARED");
             profMsgGood = true;
+            ledAdvisoryOff();   // the cleared slot replaces any warning
             page = PAGE_SAVELOC; sGrid = 0;
             break;
         }
@@ -1867,6 +1932,7 @@ void handleTap(int16_t x, int16_t y) {
         editLocation();
       } else if (y >= LOC_SAVE_Y && y < LOC_SAVE_Y + LOC_BTN_H) {
         profMsg[0] = 0;
+        ledAdvisoryOff();   // the page reopens with a fresh (empty) result line
         page = PAGE_SAVELOC;
         sGrid = 0;
         draw();

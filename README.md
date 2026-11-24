@@ -661,6 +661,13 @@ Main page: four section tiles.
   to the model fallback and skipping the NBM cross-check. The scoping is load-bearing; don't
   "simplify" it away.
 
+## LED status (onboard RGB)
+The onboard RGB LED is a device status light, driven by `src/led_status.cpp` (`ledInit()` at the start of `setup()`; `loop()` keeps it current with `ledRecompute()`):
+- **BLUE — busy**: the board is actively working — boot init + initial load, Wi-Fi scan/join (including the 10 s loop reconnect attempts), POSTAL lookup, STATION SCAN + observation checks, profile save/restore/clear, weather fetch, dog-outfit reload. An operation stays blue from start to finish even when it spans several network calls (e.g. the Open-Meteo → Nominatim fallback, a Wi-Fi reconnect mid-fetch): nested sub-steps never flash green/red in between.
+- **RED — attention**: idle, but something needs looking at — Wi-Fi disconnected or radio off, NTP not synced, no NWS station configured, or a persistent failure line on screen ("NO FREE SLOTS - CLEAR A SAVED LOCATION", "LOOKUP FAILED - RETRY", "NO MATCH FOR …", "SAVE FAILED - RETRY", "FAILED" after a join). Red is suppressed while blue is active, so a blue operation that ends in failure settles on red.
+- **GREEN — ready**: idle and healthy — connected, clock synced, NWS station configured.
+Priority: blue > red > green. The 10 s Wi-Fi reconnect *check* in `loop()` is not an activity: while disconnected the LED stays red between attempts and goes blue only during the actual `wifiEnsureConnected()` call.
+
 ## Build & flash
 - PlatformIO, board `esp32dev`, partition `huge_app.csv` (app > 1.25 MB),
   deps LovyanGFX ^1.1.0 + ArduinoJson ^7.0.0 + vendored `lib/puff`.

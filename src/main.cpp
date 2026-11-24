@@ -38,6 +38,7 @@
 #include "touch.h"
 #include "time_util.h"
 #include "profile.h"
+#include "led_status.h"
 
 void setup() {
   Serial.begin(115200);
@@ -48,6 +49,7 @@ void setup() {
   // reset before init (defensive — see displayHardReset() header comment).
   displayHardReset();
   displayInit();
+  ledInit();   // latch all LED channels off before driving them
 
   // Restore the persisted user settings (NVS "cydwx") before anything that
   // reads them: the first render, NTP offset, and weather fetch all follow.
@@ -57,6 +59,7 @@ void setup() {
   // of the station-resolution context.
   profileLoad();
   Serial.printf("[THEME] active: %s (%d)\n", themeName(userSettings.theme), userSettings.theme);
+  ledActivityBegin();   // boot init + initial weather load: one activity
 
   // SD card + dog outfit image (implementation in weather.cpp).
   weatherInitSdAndDog();
@@ -83,6 +86,7 @@ void setup() {
     if (got) refreshDogImage();   // swap error.png for the real outfit
     renderScreen();
   }
+  ledActivityEnd();   // boot done: settle to green (or red — see led_status.h)
 
   // TEMP-DEBUG: RAM probe (remove when the animation is final).
   ramProbe();
@@ -97,16 +101,26 @@ void loop() {
 
   uint32_t nowMs = millis();
 
+  // Keep the status LED current between activities (Wi-Fi drop -> red,
+  // reconnect + NTP + station -> green, ...). Cheap: pins are written only
+  // when the computed state changes.
+  ledRecompute();
+
   // ---- Reconnect WiFi if dropped (check every 10 s) ----
   // Not while the Settings modal is up: the join/scan pages manage
   // connectivity themselves, and the blocking ~20 s connect attempt would
   // starve handleTouch() (touches are polled only in this loop — a tap
   // made during the block is lost, and the board feels frozen).
   // wifiEnabled() keeps the loop from fighting the user's "WIFI ON/OFF: OFF".
+  // The 10 s check itself never turns the LED blue — while disconnected the
+  // LED stays red between attempts and goes blue only for the actual
+  // reconnect attempt below.
   if (wifiEnabled() && !settingsActive() && WiFi.status() != WL_CONNECTED &&
       nowMs - lastWifiCheck >= WIFI_RETRY_MS) {
     lastWifiCheck = nowMs;
+    ledActivityBegin();   // the reconnect attempt
     wifiEnsureConnected();
+    ledActivityEnd();
   }
 
   // ---- NTP: once connected, wait for sync ----
@@ -116,7 +130,9 @@ void loop() {
     // If weather was already fetched before the clock existed, its rain scan
     // was skipped — refetch now so the state-change redraw below shows the
     // correct rain line + outfit (no extra render: this block runs first).
+    ledActivityBegin();   // refetch + outfit: one activity
     if (wx.valid && fetchWeather()) refreshDogImage();
+    ledActivityEnd();
   }
 
   // ---- Full redraw only when the status-bar indicators change ----
@@ -135,12 +151,15 @@ void loop() {
   // block that would swallow touch events the same way the reconnect does.
   if (needWeather && wifiOk && !settingsActive() && nowMs - lastWeatherTry >= WX_MIN_RETRY_MS) {
     lastWeatherTry = nowMs;
-    // Data + outfit update even while the THEME picker is up; the redraw
+    // One activity over fetch + outfit (no green flash between the two);
+    // data + outfit update even while the THEME picker is up — the redraw
     // waits until the user returns to the main display.
+    ledActivityBegin();
     if (fetchWeather()) {
       refreshDogImage();
       if (!themeSelectScreen && !settingsActive()) renderScreen();
     }
+    ledActivityEnd();
   }
 
   // ---- Per-second tick: repaint clock/date only when their text changes ----

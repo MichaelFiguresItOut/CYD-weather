@@ -12,6 +12,7 @@
 #include "wifi_conn.h"
 #include "dog_image.h"
 #include "config.h"
+#include "led_status.h"
 
 // ---------------------------------------------------------------------------
 //  SD card slot (from the CYD MCU schematic ESP32-2432S032-MCU-V1.0):
@@ -179,7 +180,7 @@ static bool nbmIndicatesContinuation(const StepTime& end) {
 // ---------------------------------------------------------------------------
 //  Open-Meteo fetch (HTTPS)
 // ---------------------------------------------------------------------------
-bool fetchWeather() {
+static bool fetchWeatherRun() {   // renamed: wrapped by fetchWeather() below
   if (!wifiEnsureConnected()) return false;
 
   Serial.printf("[WX] rssi=%d dBm freeHeap=%lu\n", WiFi.RSSI(), ESP.getFreeHeap());   // diagnostic
@@ -526,6 +527,7 @@ void refreshDogImage() {
   const char* want = selectDogImage();
   if (strcmp(want, dogCurrentName()) == 0) return;   // already showing it
 
+  ledActivityBegin();   // SD read + PNG decode
   bool ok = false;
   for (int attempt = 1; attempt <= 3 && !ok; attempt++) {
     if (attempt > 1) delay(200);   // transient read error - try again
@@ -538,10 +540,12 @@ void refreshDogImage() {
       ok = loadDogImage("error.png");
     }
   }
+  ledActivityEnd();
 }
 
 // SD card bring-up + initial dog image (moved out of setup()).
 void weatherInitSdAndDog() {
+  ledActivityBegin();   // SD init + first dog image
   static SPIClass sdSpi(HSPI);   // SPI2 peripheral, separate from the TFT's SPI3
   sdSpi.begin(SD_SCK, SD_MISO, SD_MOSI);
 
@@ -561,4 +565,15 @@ void weatherInitSdAndDog() {
   } else {
     Serial.println("[SD] no card / init failed after 3 tries - continuing without dog image");
   }
+  ledActivityEnd();
+}
+
+// Public entry point: one busy activity over the whole weather fetch (Wi-Fi
+// reconnect if needed + Open-Meteo + NBM + METAR + station-chain handling),
+// so a finishing sub-step never turns the status LED green mid-fetch.
+bool fetchWeather() {
+  ledActivityBegin();
+  bool ok = fetchWeatherRun();
+  ledActivityEnd();
+  return ok;
 }

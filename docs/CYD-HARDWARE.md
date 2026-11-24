@@ -36,6 +36,9 @@ which documents the weather app itself.
 | Display CS / RST / DC / SCK / MOSI | 15 / 12 / 2 / 14 / 13 |
 | Backlight (PWM) | 27 |
 | Touch SDA / SCL / RST | 33 / 32 / 25 |
+| RGB LED R / G / B (status) | 4 / 16 / 17 |
+
+- **RGB LED (status light)**: the CYD MCU schematic shows the onboard RGB LED on GPIO **R = 4, G = 16, B = 17**, **active-low** (drive LOW to light a channel, HIGH = off). All three pins are free of the display/touch/SD buses above (SD uses 5/18/19/23), so no conflict. `src/led_status.cpp` drives it as a three-state status LED (blue = busy, red = attention, green = ready — README, "LED status (onboard RGB)"): channels are latched HIGH (off) before being set `OUTPUT` at boot, then handed to the ESP32 LEDC controller — 5 kHz, 8-bit PWM, every channel lit at a fixed ~1.2% brightness (pin LOW 3/256 of the period; duty inverted for the active-low wiring), and from boot on the pins are written only via `ledcWrite()`.
 
 ## Memory: internal RAM vs PSRAM (this unit has no usable PSRAM)
 

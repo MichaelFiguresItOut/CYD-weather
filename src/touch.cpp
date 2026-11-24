@@ -6,6 +6,7 @@
 #include "render.h"
 #include "picker.h"
 #include "settings.h"
+#include "led_status.h"
 
 // ---------------------------------------------------------------------------
 //  Touch targets (per-action debounce: 300 ms zone taps, 2 s refresh)
@@ -241,12 +242,17 @@ void handleTouch() {
     return;
   }
 
-  // Anywhere else: force a weather refresh (original behavior)
+  // Anywhere else: force a weather refresh (original behavior). One activity
+  // over connect + fetch + outfit, so the LED never flashes green between
+  // the steps.
+  ledActivityBegin();
   if (!wifiEnsureConnected()) {
     renderScreen();   // show offline status
+    ledActivityEnd();
     return;
   }
   bool got = fetchWeather();
   if (got) refreshDogImage();
+  ledActivityEnd();
   renderScreen();
 }
