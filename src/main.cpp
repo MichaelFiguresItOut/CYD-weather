@@ -39,6 +39,8 @@
 #include "time_util.h"
 #include "profile.h"
 #include "led_status.h"
+#include "nws_alerts.h"
+#include "alerts_screen.h"
 
 void setup() {
   Serial.begin(115200);
@@ -162,11 +164,38 @@ void loop() {
     ledActivityEnd();
   }
 
+  // ---- NWS active alerts (nws_alerts.cpp) ----
+  // Cadence lives in alertsDue(): every 5 min while any alert is active,
+  // every 15 min when clear, 60 s floor between attempts. A (re)connect
+  // forces a fresh check and a location change clears the stale cache.
+  // The fetch blocks like fetchWeather, so it is skipped while the Settings
+  // or the alert detail screen is up; a changed cache triggers the full
+  // redraw that shows/hides the "WEATHER ALERT" pill (no LED activity:
+  // routine background polling).
+  static bool  lastAlertsWifi = false;
+  static float lastAlertsLat = 0.0f, lastAlertsLon = 0.0f;
+  if (wifiOk != lastAlertsWifi) {
+    lastAlertsWifi = wifiOk;
+    if (wifiOk) alertsForceDue();
+  }
+  if (userSettings.lat != lastAlertsLat || userSettings.lon != lastAlertsLon) {
+    lastAlertsLat = userSettings.lat;
+    lastAlertsLon = userSettings.lon;
+    alertsLocationChanged();   // old cache no longer applies
+    if (!themeSelectScreen && !settingsActive()) renderScreen();
+  }
+  if (alertsDue() && !settingsActive() && !alertsScreenActive()) {
+    if (alertsFetch() && !themeSelectScreen && !settingsActive()) renderScreen();
+  }
+
   // ---- Per-second tick: repaint clock/date only when their text changes ----
   bool timeChanged = ntpSynced && (nowMs / 1000 != lastClockDraw / 1000);
   if (timeChanged) {
     lastClockDraw = nowMs;
-    if (!themeSelectScreen && !settingsActive())    // partial updates target the main display only
+    // Partial updates target the main display only - the picker, Settings
+    // and the alert detail screen are full-screen modals that repaint
+    // themselves, so the per-second band repaint must not land on them.
+    if (!themeSelectScreen && !settingsActive() && !alertsScreenActive())
       updateDynamicTexts();
   }
 

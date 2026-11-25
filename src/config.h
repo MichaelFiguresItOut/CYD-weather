@@ -145,6 +145,12 @@ bool autoTimezoneUnsupported();
 // ---------------------------------------------------------------------------
 constexpr uint32_t WEATHER_REFRESH_MS = 15UL * 60UL * 1000UL;   // periodic weather fetch
 constexpr uint32_t WX_MIN_RETRY_MS    = 30UL * 1000UL;          // min gap between fetch attempts
+// NWS active-alert polling (nws_alerts.cpp): tighter while any alert is
+// active (it can end at any time), relaxed when clear, and a hard floor
+// between attempts so repeated failures don't hammer the API.
+constexpr uint32_t ALERTS_REFRESH_ACTIVE_MS = 5UL * 60UL * 1000UL;
+constexpr uint32_t ALERTS_REFRESH_CLEAR_MS  = 15UL * 60UL * 1000UL;
+constexpr uint32_t ALERTS_MIN_GAP_MS        = 60UL * 1000UL;
 constexpr uint32_t WIFI_RETRY_MS      = 10UL * 1000UL;          // WiFi reconnect check interval
 constexpr uint32_t NTP_BOOT_WAIT_MS   = 10UL * 1000UL;          // max wait for NTP before initial fetch
 

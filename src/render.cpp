@@ -296,14 +296,20 @@ void loadNunitoFonts() {
           && nunitoF20.loadFont(&nunitoW20) && nunitoF48.loadFont(&nunitoW48);
 }
 
+const lgfx::IFont* nunitoEm9()  { return nunitoOK ? &nunitoF9 : nullptr; }
+const lgfx::IFont* nunitoEm12() { return nunitoOK ? &nunitoF12 : nullptr; }
+const lgfx::IFont* nunitoEm13() { return nunitoOK ? &nunitoF13 : nullptr; }
+
 // Pixel width of a BFF string at scale 1 (sum of advances; default advance on miss).
-static int bffWidth(const lgfx::IFont& f, const char* s) {
+// Shared by the alert screen (width-based wrapping) and the fit helpers below.
+int bffWidth(const lgfx::IFont& f, const char* s) {
   lgfx::FontMetrics m;
   f.getDefaultMetric(&m);
   int w = 0;
   for (; *s; ++s) { (void)f.updateFontMetric(&m, (uint16_t)(unsigned char)*s); w += m.x_advance; }
   return w;
 }
+inline int bffWidth(const lgfx::IFont* f, const char* s) { return f ? bffWidth(*f, s) : 0; }
 
 // Shrink-to-fit scale for a BFF string: min(1.0, avail / width).
 static float bffFit(const lgfx::IFont& f, const char* s, int avail) {
@@ -320,7 +326,7 @@ static float bffFit(const lgfx::IFont& f, const char* s, int avail) {
 static lgfx::BFFfont* bffRainFont(const char* s, int avail, float* sc) {
   static lgfx::BFFfont* order[] = { &nunitoF13, &nunitoF12, &nunitoF10, &nunitoF9 };
   for (auto* f : order)
-    if (bffWidth(*f, s) <= avail) { *sc = 1.0f; return f; }
+    if (bffWidth(f, s) <= avail) { *sc = 1.0f; return f; }
   *sc = bffFit(nunitoF9, s, avail);   // longer than any real rain line
   return &nunitoF9;
 }
@@ -364,7 +370,7 @@ static void drawSkyDynamicBand(const T& t) {
   gT->fillCircle(t.X(10) + dr, t.Y(7 + 4), dr, p.dot);
   bffText(t, nunitoF10, status, (int)(10 + 8 * 1.2f), 7, p.stL, 1.0f, bgCode(1, 0, 7));
   const char* dn = dayNightLabel();
-  int rw = bffWidth(nunitoF10, dn);
+  int rw = bffWidth(&nunitoF10, dn);
   bffText(t, nunitoF10, dn, 310 - rw, 7, p.stR, 1.0f, bgCode(1, 0, 7));
   {
     int icx = 310 - rw - (int)(9 * 1.2f);
@@ -958,6 +964,48 @@ static void renderTheme3(const T& t) {
   else          renderTheme3Legacy(t);
 }
 
+// ---------------------------------------------------------------------------
+//  NWS active alerts - "WEATHER ALERT" pill on the dashboard
+//
+//  Drawn as the last element of every theme (renderTheme) so it sits above
+//  all theme content. Per-theme rects: BASIC/SKY/SPLIT sit in open space;
+//  BENTO has no open space, so the pill replaces the detail card's
+//  least-important row (data age + refresh hint). alertBtnRect() is the
+//  single source of truth - touch.cpp hit-tests the same rectangle.
+// ---------------------------------------------------------------------------
+
+// Severity palette (565), indexed by alertsHighestSeverity().
+static const uint16_t ALERT_PILL_BG[4] = {
+  C(0xa5, 0x0a, 0x3c),   // 0 EXTREME: deep red
+  C(0xb0, 0x30, 0x20),   // 1 SEVERE: red-orange
+  C(0x9c, 0x7a, 0x08),   // 2 MODERATE: amber
+  C(0x1f, 0x6f, 0xb2)    // 3 MINOR / INFO: blue
+};
+static const uint16_t ALERT_PILL_BD[4] = {
+  C(0xff, 0x2a, 0x6a),
+  C(0xff, 0x6b, 0x4a),
+  C(0xff, 0xc4, 0x28),
+  C(0x5a, 0xb0, 0xff)
+};
+
+AlertBtnRect alertBtnRect(int theme) {
+  switch (theme) {
+    case THEME_SKY:   return AlertBtnRect{ 228, 78, 88, 20 };   // right of the sun, above the dog zone
+    case THEME_SPLIT: return AlertBtnRect{ 224, 150, 92, 22 };  // open middle of the stage panel
+    case THEME_BENTO: return AlertBtnRect{ 12, 216, 184, 14 };  // over the detail card's info line
+    default:          return AlertBtnRect{ 12, 204, 132, 22 };  // BASIC: open bottom-left
+  }
+}
+
+void drawAlertButton(const T& t) {
+  if (!alertsActive()) return;
+  const AlertBtnRect r = alertBtnRect(userSettings.theme);
+  const int sv = alertsHighestSeverity() & 3;
+  gT->fillRoundRect(t.X(r.x), t.Y(r.y), max(1, t.W(r.w)), max(1, t.H(r.h)), 3, ALERT_PILL_BG[sv]);
+  gT->drawRoundRect(t.X(r.x), t.Y(r.y), max(1, t.W(r.w)), max(1, t.H(r.h)), 3, ALERT_PILL_BD[sv]);
+  drawCenter(t, r.x + r.w / 2, r.y + (r.h - 8) / 2, "WEATHER ALERT", 1.0f, 0xFFFF, r.w - 6);
+}
+
 void renderTheme(int idx, const T& t) {
   switch (idx) {
     case 0: renderTheme0(t); break;
@@ -965,11 +1013,18 @@ void renderTheme(int idx, const T& t) {
     case 2: renderTheme2(t); break;   // SPLIT
     default: renderTheme3(t); break;  // BENTO
   }
+  drawAlertButton(t);   // last: the pill sits above all theme content
 }
 
 // LovyanGFX v1 draws in immediate mode – every call goes straight to the
 // panel over SPI, so there is no separate framebuffer flush step.
 void renderScreen() {
+  // The shared tft's text datum is inherited from whatever drew last (the
+  // modal screens set MC/TR for their headers/footers); the dashboard layout
+  // assumes TL_DATUM, and the explicit-font drawString overloads used by the
+  // BFF text honour the current datum, so force it here rather than relying
+  // on every caller to leave it clean.
+  tft.setTextDatum(TL_DATUM);
   renderTheme(userSettings.theme, T::ID);
 }
 
@@ -994,6 +1049,7 @@ void renderScreen() {
 // ---------------------------------------------------------------------------
 void updateDynamicTexts() {
   if (!ntpSynced) return;
+  tft.setTextDatum(TL_DATUM);   // band repaints use bare drawString (datum-dependent)
   struct tm lt;
   nowLocal(&lt);
 
@@ -1141,6 +1197,7 @@ void updateDynamicTexts() {
       const BentoPal& p = BENTO();
       gT->fillRect(t.X(22), t.Y(213), max(1, t.W(166)), 16, p.cardBg);
       drawBentoInfoLine(t);   // re-syncs lastBentoInfo
+      drawAlertButton(t);     // the band wipe covered the pill: redraw it
     }
     return;
   }

@@ -7,6 +7,8 @@
 #include "picker.h"
 #include "settings.h"
 #include "led_status.h"
+#include "nws_alerts.h"
+#include "alerts_screen.h"
 
 // ---------------------------------------------------------------------------
 //  Touch targets (per-action debounce: 300 ms zone taps, 2 s refresh)
@@ -23,20 +25,39 @@
 //  so wide hit areas are safe. Bands follow the ACTIVE THEME: theme 0 derives
 //  from gLayout; themes 1-3 use fixed bands around their design positions.
 // ---------------------------------------------------------------------------
-struct TouchBands { int clkTop, clkBot, dateTop, dateBot, tempTop, tempBot, tempMaxX; };
+struct TouchBands {
+  int clkTop, clkBot, dateTop, dateBot, tempTop, tempBot, tempMaxX;
+  int alX, alY, alW, alH;   // "WEATHER ALERT" pill (alertBtnRect, render.h)
+};
 static TouchBands touchBands() {
   switch (userSettings.theme) {
-    case 0:   // BASIC – original gLayout-derived zones
-      return { gLayout.statusBarY + glyphH(1) + 2, gLayout.clockY + glyphH(gLayout.clockSize),
-               gLayout.clockY + glyphH(gLayout.clockSize), gLayout.dateY + glyphH(gLayout.dateSize) + 4,
-               gLayout.tempY - 4, gLayout.tempY + glyphH(gLayout.tempSize) + 2,
-               tft.width() - gLayout.dogZoneW };
-    case 1:   // SKY – status y7, clock y19 (≤5.25), date y62, temp y76 (≤6)
-      return { 18, 61, 61, 75, 75, 125, 220 };
-    case 2:   // SPLIT – status y9, clock y24 (≤4.6), date y64, temp y80; left zone only
-      return { 20, 62, 62, 77, 77, 125, 210 };
-    default:  // BENTO – clock card [8,60) split at the date line; temp card [66,138]
-      return { 8, 40, 40, 60, 66, 138, 202 };
+    case 0: {   // BASIC – original gLayout-derived zones
+      TouchBands b{ gLayout.statusBarY + glyphH(1) + 2, gLayout.clockY + glyphH(gLayout.clockSize),
+                    gLayout.clockY + glyphH(gLayout.clockSize), gLayout.dateY + glyphH(gLayout.dateSize) + 4,
+                    gLayout.tempY - 4, gLayout.tempY + glyphH(gLayout.tempSize) + 2,
+                    tft.width() - gLayout.dogZoneW, 0, 0, 0, 0 };
+      const AlertBtnRect r = alertBtnRect(userSettings.theme);
+      b.alX = r.x; b.alY = r.y; b.alW = r.w; b.alH = r.h;
+      return b;
+    }
+    case 1: {   // SKY – status y7, clock y19 (≤5.25), date y62, temp y76 (≤6)
+      TouchBands b{ 18, 61, 61, 75, 75, 125, 220, 0, 0, 0, 0 };
+      const AlertBtnRect r = alertBtnRect(userSettings.theme);
+      b.alX = r.x; b.alY = r.y; b.alW = r.w; b.alH = r.h;
+      return b;
+    }
+    case 2: {   // SPLIT – status y9, clock y24 (≤4.6), date y64, temp y80; left zone only
+      TouchBands b{ 20, 62, 62, 77, 77, 125, 210, 0, 0, 0, 0 };
+      const AlertBtnRect r = alertBtnRect(userSettings.theme);
+      b.alX = r.x; b.alY = r.y; b.alW = r.w; b.alH = r.h;
+      return b;
+    }
+    default: {  // BENTO – clock card [8,60) split at the date line; temp card [66,138]
+      TouchBands b{ 8, 40, 40, 60, 66, 138, 202, 0, 0, 0, 0 };
+      const AlertBtnRect r = alertBtnRect(userSettings.theme);
+      b.alX = r.x; b.alY = r.y; b.alW = r.w; b.alH = r.h;
+      return b;
+    }
   }
 }
 
@@ -60,6 +81,13 @@ static bool inTempZone(int x, int y) {   // big temperature digits (left of the 
   return x >= 0 && x < b.tempMaxX && y >= b.tempTop && y < b.tempBot;
 }
 
+static bool inAlertZone(int x, int y) {  // "WEATHER ALERT" pill (when active)
+  if (!alertsActive()) return false;
+  TouchBands b = touchBands();
+  // 4 px of slack around the drawn pill (BENTO's is only 14 px tall).
+  return x >= b.alX && x < b.alX + b.alW && y >= b.alY - 4 && y < b.alY + b.alH + 4;
+}
+
 // Gesture tracking for the THEME picker: a gesture starts on touch-down and is
 // evaluated when all fingers lift. Horizontal movement > 24 px (and clearly
 // more than vertical) = swipe; otherwise a short, small-movement press = tap.
@@ -75,6 +103,7 @@ static SwipeState swipe;
 // the finger lifts. File scope so settingsTouchRearm() can reset it after a
 // long blocking operation (see touch.h).
 static bool settingsDown = false;
+static bool alertsDown = false;     // touch-down edge for the alert detail page (set/reset in handleTouch)
 
 // Re-arm the Settings tap edge (see touch.h for why).
 void settingsTouchRearm() {
@@ -86,6 +115,28 @@ void settingsTouchRearm() {
 void handleTouch() {
   lgfx::touch_point_t pts[5];
   int n = tft.getTouch(pts, 5);
+
+  // ---- WEATHER ALERTS screen: modal — owns every tap while it is up.
+  //  It can only be reached from the main display (and only while an alert
+  //  is cached), so no other modal can be active underneath it.
+  //  The press that OPENED the screen is usually still on the glass when the
+  //  page is drawn, so the picker-style release drain (alerts_screen) swallows
+  //  it; taps then fire on the DOWN edge only (re-armed when all fingers lift)
+  //  so one hold pages once, not once per loop.
+  if (alertsScreenActive()) {
+    alertsScreenPollRelease();
+    if (alertsScreenAwaitingRelease()) return;   // swallow the press that opened us
+    if (n > 0) {
+      if (!alertsDown) {
+        alertsDown = true;
+        alertsScreenTouch(pts[0].x, pts[0].y);
+      }
+    } else {
+      alertsDown = false;
+    }
+    return;
+  }
+  alertsDown = false;   // screen closed (closeAlerts) — clear the down-edge state
 
   // ---- SETTINGS screen: modal — route every tap, the main-display zones and
   // the THEME picker are inactive while it is up (also reached from the
@@ -105,6 +156,12 @@ void handleTouch() {
     return;
   }
   settingsDown = false;
+
+  // The press that just OPENED or CLOSED the alert screen may still be on
+  // the glass: swallow the rest of it so it can't fall through to the
+  // dashboard zones below (pill re-open / refresh), picker or theme dot.
+  alertsScreenPollRelease();
+  if (alertsScreenAwaitingRelease()) return;
 
   // ---- THEME picker: gesture tracking (swipe left/right, tap to select) ----
   if (themeSelectScreen) {
@@ -197,7 +254,7 @@ void handleTouch() {
   static uint32_t lastToggle = 0;   // dog / clock / date / temp zone taps
   static uint32_t lastRefresh = 0;  // manual weather refresh
   bool refreshTap = !inDogZone(x, y) && !inClockZone(x, y) &&
-                    !inDateZone(x, y) && !inTempZone(x, y);
+                    !inDateZone(x, y) && !inTempZone(x, y) && !inAlertZone(x, y);
   if (refreshTap) {
     if (millis() - lastRefresh < 2000) return;   // debounce
     lastRefresh = millis();
@@ -207,6 +264,11 @@ void handleTouch() {
   }
 
   Serial.printf("[TOUCH] (%d,%d)\n", x, y);
+
+  if (inAlertZone(x, y)) {              // "WEATHER ALERT" pill -> alert list
+    alertsScreenOpen();                 // arms its opening-press drain
+    return;
+  }
 
   if (inDogZone(x, y)) {                // dog corner zone -> THEME picker
     themeSelectScreen = true;
