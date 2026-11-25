@@ -64,13 +64,26 @@ constexpr int BFF_MAX_W = 312;      // Nunito: body width in px
 constexpr int BFF_MAX_CHARS = 64;   // Nunito: char cap per line
 constexpr int LINE_BUF = BFF_MAX_CHARS + 1;
 
+// Line budgets. DESC_MAX_LINES must hold the wrapped form of a FULL
+// description buffer (2048 chars ~= 50-60 em13 lines in practice),
+// INSTR_MAX_LINES a full instruction buffer (256 chars). buildStream() then
+// sizes the stream from these, so the whole alert - description plus
+// instructions - always fits and is reachable across pages; wrapBff() only
+// appends a visible "..." when a budget is actually exceeded (which the
+// buffer caps above make unreachable for well-formed NWS text).
+constexpr int DESC_MAX_LINES  = 72;
+constexpr int INSTR_MAX_LINES = 8;
+
 // Flat content stream for the alert on screen: description lines, then
-// (when present) a blank line, the dim "WHAT TO DO" label, and the
-// instruction lines. drawAlertPage() renders one page (BODY_LINES of it);
+// (when present) a blank line, the "WHAT TO DO" label, and the instruction
+// lines. drawAlertPage() renders one page (BODY_LINES of it);
 // buildStream() fills it and returns the page count.
-static const int STREAM_MAX = 56;
+// Sizing: description + one blank per page a section heading is pushed
+// off (few in practice) + the blank and label before the instructions +
+// instructions + slack.
+constexpr int STREAM_MAX =
+    DESC_MAX_LINES + DESC_MAX_LINES / 8 + 2 + 1 + 1 + INSTR_MAX_LINES + 1;
 static char gStream[STREAM_MAX][LINE_BUF];
-static bool gStreamLabel[STREAM_MAX];
 static int  gStreamN = 0;
 
 static bool gOpen = false;
@@ -140,6 +153,35 @@ static void fitEvent(const char* in, char* out, size_t n) {
   snprintf(out, n, "%s", in);
   while (txtW(out, 2) > 312 && strlen(out) > 1) {
     out[strlen(out) - 1] = 0;
+  }
+}
+
+// Fit a single meta line (area list) to the 312 px body width. A long list
+// is trimmed from the end, then rolled back to a word boundary with a
+// trailing "..." marker, so it neither runs off the edge nor cuts a county
+// name. f9 null = GLCD size-1 fallback (width from txtW).
+static void fitMetaLine(const char* in, char* out, size_t n, const lgfx::IFont* f9) {
+  const bool preCut = snprintf(out, n, "%s", in) >= (int)n;
+  auto w = [&](const char* s) -> int {
+    return f9 ? bffWidth(*f9, s) : txtW(s, 1);
+  };
+  while (w(out) > BFF_MAX_W && strlen(out) > 1) {
+    out[strlen(out) - 1] = 0;
+  }
+  if (w(out) > BFF_MAX_W) return;   // a single glyph wider than the body: degenerate
+  if (!preCut && strcmp(out, in) == 0) return;   // fitted whole: nothing to mark
+  // Trimmed: end at a word boundary and mark the cut with "..." (a final
+  // char trim keeps the marker inside the width in the edge case where the
+  // word boundary sits within a few px of the edge).
+  size_t k = strlen(out);
+  while (k > 0 && out[k - 1] != ' ') k--;
+  if (k > 0) out[k - 1] = 0;   // cut at the boundary (drop the space)
+  const size_t L = strlen(out);
+  if (L + 4 <= n) {
+    out[L] = '.'; out[L + 1] = '.'; out[L + 2] = '.'; out[L + 3] = 0;
+    while (w(out) > BFF_MAX_W && strlen(out) > 3) {
+      out[strlen(out) - 1] = 0;
+    }
   }
 }
 
@@ -341,32 +383,61 @@ static void drawHeader(bool canPrev, bool canNext) {
 
 // Fill the content stream for one alert: the description wrapped on the
 // body face (pixel width), then (when the alert has instructions) a blank
-// line, the dim "WHAT TO DO" label, and the wrapped instructions. Returns
-// the page count. fBody is the Nunito body face (nunitoEm13()); nullptr
-// selects the GLCD char-width fallback.
+// line, the "WHAT TO DO" label, and the wrapped instructions. Returns the
+// page count. fBody is the Nunito body face (nunitoEm13()); nullptr selects
+// the GLCD char-width fallback.
+//
+// A page break must not leave a heading on the last row of a page with its
+// content starting on the next one:
+//   - "*" bullet lines are section headings (WHAT, WHERE, WHEN, ...): a
+//     blank line is inserted before one that would end a page, moving the
+//     heading and the rest of the section to the top of the next page. The
+//     pass runs over the description before the label block is appended and
+//     only shifts lines after its insertion point, so one forward pass
+//     suffices and the label rule below always sees the final layout.
+//   - "WHAT TO DO" (appended afterwards) is never left on the last row:
+//     when it would be, the separating blank line is dropped and the page
+//     break itself supplies the separation, so the label keeps at least its
+//     first instruction line.
 static int buildStream(const NwsAlert* a, const lgfx::IFont* fBody) {
   bool dTrunc = false;
-  int dn = fBody ? wrapBff(a->description, fBody, gStream, 50, &dTrunc)
-                 : wrapText(a->description, gStream, 50, &dTrunc);
-  gStreamN = dn;
-  for (int i = 0; i < dn; i++) gStreamLabel[i] = false;
-  if (a->instructions[0] && gStreamN < STREAM_MAX - 6) {
-    gStream[gStreamN][0] = 0; gStreamLabel[gStreamN] = false; gStreamN++;   // blank
-    // Keep the label off the bottom row of a page (the instructions would
-    // continue on the next one) by starting it on a fresh page.
-    if (gStreamN % BODY_LINES == BODY_LINES - 2) {
-      gStream[gStreamN][0] = 0; gStreamLabel[gStreamN] = false; gStreamN++;
+  const int dn = fBody ? wrapBff(a->description, fBody, gStream, DESC_MAX_LINES, &dTrunc)
+                       : wrapText(a->description, gStream, DESC_MAX_LINES, &dTrunc);
+  int n = dn;
+  // Section headings off the bottom row (see above). Only a heading with
+  // content after it in the stream can be orphaned (i < n - 1 and the
+  // non-blank lookahead).
+  for (int i = 0; i < n - 1; i++) {
+    if (gStream[i][0] != '*') continue;
+    if (i % BODY_LINES != BODY_LINES - 1) continue;
+    bool hasAfter = false;
+    for (int j = i + 1; j < n; j++) {
+      if (gStream[j][0]) { hasAfter = true; break; }
+    }
+    if (!hasAfter) continue;
+    if (n >= STREAM_MAX - 1) break;           // out of room: skip, don't crash
+    memmove(&gStream[i + 1], &gStream[i], (size_t)(n - i) * sizeof(gStream[0]));
+    gStream[i][0] = 0;
+    n++;
+  }
+  gStreamN = n;
+  // Room for the blank line, the label and all instruction lines.
+  if (a->instructions[0] && gStreamN < STREAM_MAX - (INSTR_MAX_LINES + 3)) {
+    // Drop the blank only where it would leave "WHAT TO DO" on the last row
+    // of a page (its instructions would start on the next one): with the
+    // blank the label row is (n+1) % BODY_LINES, without it n % BODY_LINES,
+    // and the only last-row case is n % BODY_LINES == 6.
+    if (gStreamN % BODY_LINES != BODY_LINES - 2) {
+      gStream[gStreamN][0] = 0; gStreamN++;
     }
     snprintf(gStream[gStreamN], LINE_BUF, "WHAT TO DO");
-    gStreamLabel[gStreamN] = true;
     gStreamN++;
-    char il[4][LINE_BUF];
+    char il[INSTR_MAX_LINES][LINE_BUF];
     bool iTrunc = false;
-    const int in = fBody ? wrapBff(a->instructions, fBody, il, 4, &iTrunc)
-                      : wrapText(a->instructions, il, 4, &iTrunc);
+    const int in = fBody ? wrapBff(a->instructions, fBody, il, INSTR_MAX_LINES, &iTrunc)
+                      : wrapText(a->instructions, il, INSTR_MAX_LINES, &iTrunc);
     for (int i = 0; i < in && gStreamN < STREAM_MAX; i++) {
       memcpy(gStream[gStreamN], il[i], LINE_BUF);
-      gStreamLabel[gStreamN] = false;
       gStreamN++;
     }
   }
@@ -434,12 +505,14 @@ static void drawAlertPage(int idx, int page) {
     }
   }
 
+  char areaLine[sizeof(((NwsAlert*)nullptr)->area) + 4];
+  fitMetaLine(a->area, areaLine, sizeof(areaLine), f9);   // f9 null = GLCD fallback
   if (f9) {
-    textBff(f9, a->area, 4, AREA_Y, colHint);
+    textBff(f9, areaLine, 4, AREA_Y, colHint);
   } else {
     tft.setTextSize(1);
     tft.setTextColor(colHint);
-    tft.drawString(a->area, 4, AREA_Y);
+    tft.drawString(areaLine, 4, AREA_Y);
   }
 
   // Body: one page of the content stream (description, then instructions).
@@ -447,13 +520,13 @@ static void drawAlertPage(int idx, int page) {
   for (int k = 0; k < BODY_LINES; k++) {
     const int i = off + k;
     if (i >= gStreamN || !gStream[i][0]) continue;   // blank/used-up slot
+    const int y = BODY_Y + k * BODY_PITCH;
     if (f13) {
-      textBff(f13, gStream[i], 4, BODY_Y + k * BODY_PITCH,
-              gStreamLabel[i] ? colHint : colBgTxt);
+      textBff(f13, gStream[i], 4, y, colBgTxt);
     } else {
       tft.setTextSize(BODY_FONT);
-      tft.setTextColor(gStreamLabel[i] ? colHint : colBgTxt);
-      tft.drawString(gStream[i], 4, BODY_Y + k * BODY_PITCH);
+      tft.setTextColor(colBgTxt);
+      tft.drawString(gStream[i], 4, y);
     }
   }
 

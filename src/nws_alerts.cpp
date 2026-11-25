@@ -101,7 +101,12 @@ static bool isBreakTag(const char* tag, size_t len) {
 
 // Remove HTML tags, unescape the entities NWS actually emits, collapse
 // whitespace runs, and truncate at n-1. NWS descriptions/instructions are
-// HTML with <br>, <b>, <ul>/<li> and &nbsp;.
+// HTML with <br>, <b>, <ul>/<li> and &nbsp.
+//
+// Truncation never cuts mid-word: when the buffer fills before the input
+// does, the text is rolled back to the last word boundary and a trailing
+// "..." marks the cut (a word-boundary cut without the marker would read
+// as a sentence that simply ended).
 //
 // Line structure: NWS wraps its own text at ~60 columns, so a <br>, </li>,
 // </p> or raw newline mid-item is just source formatting and becomes a
@@ -185,7 +190,8 @@ static void htmlToText(const char* in, char* out, size_t n) {
     if (out[o - 1] == '\n') return;              // collapse runs to one break
     if (o < n - 1) { out[o++] = '\n'; prevSpace = true; }
   };
-  for (const char* p = in; *p && o < n - 1; p++) {
+  const char* p = in;
+  for (; *p && o < n - 1; p++) {
     char c = *p;
     if (c == '<') { inTag = true; tagStart = p; continue; }
     if (c == '>') {
@@ -269,9 +275,34 @@ static void htmlToText(const char* in, char* out, size_t n) {
     }
     emitChar(c);
   }
+  // The loop stops either when the input ends or when the output fills to
+  // n-1; input remaining after the stop means the text was cut here.
+  const bool capHit = (*p != 0);
+  if (capHit) {
+    // The buffer filled before the input did: roll back to the last word
+    // boundary (the trim below drops the space) so the cut never lands
+    // mid-word; the "..." below marks it.
+    size_t k = o;
+    while (k > 0 && out[k - 1] != ' ' && out[k - 1] != '\n') k--;
+    o = k;
+  }
   while (o > 0 && (out[o - 1] == '\n' || out[o - 1] == ' ')) o--;   // no dangling break/space
+  if (capHit) {
+    // Leave room for the marker: if the kept word boundary sits within 3
+    // chars of the cap, step one more whole word back (clamping to n-4
+    // would land mid-word again).
+    size_t b = o;
+    while (b + 3 > n - 1 && b > 0) {
+      size_t o2 = b;
+      while (o2 > 0 && out[o2 - 1] != ' ' && out[o2 - 1] != '\n') o2--;
+      b = (o2 > 0) ? o2 - 1 : 0;   // keep the text before that space
+    }
+    o = b;
+    if (n >= 4) { out[o++] = '.'; out[o++] = '.'; out[o++] = '.'; }
+  }
   // NWS's "* WHAT..." label style: a run of 3+ dots running straight into
-  // the next word becomes a spaced dash.
+  // the next word becomes a spaced dash. A trailing "..." (truncation
+  // marker) is left as-is.
   {
     size_t w = 0;
     for (size_t i = 0; i < o;) {
@@ -530,9 +561,11 @@ bool alertsFetch() {
     copyUpper(p["severity"].as<const char*>(), a->severity, sizeof(a->severity));
     copyUpper(p["areaDesc"].as<const char*>(), a->area, sizeof(a->area));
     const char* descRaw = p["description"].as<const char*>();
-    const char* instrRaw = p["instructions"].as<const char*>();
+    // The NWS field is singular: "instruction" (a misnamed "instructions"
+    // silently yields an empty WHAT TO DO section).
+    const char* instrRaw = p["instruction"].as<const char*>();
     logNonAscii("description", descRaw);
-    logNonAscii("instructions", instrRaw);
+    logNonAscii("instruction", instrRaw);
     htmlToText(descRaw, a->description, sizeof(a->description));
     htmlToText(instrRaw, a->instructions, sizeof(a->instructions));
     a->ends = parseIso8601(p["ends"].as<const char*>());

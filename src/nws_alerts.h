@@ -32,12 +32,18 @@
 #define NWS_ALERTS_MAX 8
 
 // One cached alert (display-ready subset of the NWS properties).
+// Buffer sizing: NWS descriptions run ~1.2-1.5 KB in practice (a combined
+// coastal flood product measured 1449 chars after HTML stripping); the
+// 2048-byte description keeps the full text with margin, at 8 alerts x 2 KB
+// of static RAM on a no-PSRAM board. When a description ever fills the
+// buffer, htmlToText() cuts at a word boundary with a "..." marker instead
+// of mid-word.
 struct NwsAlert {
   char event[28];        // uppercased, e.g. "HIGH WIND WATCH"
   char severity[9];      // "EXTREME" | "SEVERE" | "MODERATE" | "MINOR"
-  char area[48];         // affected area description (uppercased, truncated)
-  char description[1280]; // HTML stripped, truncated (NWS watches run ~1.2 KB)
-  char instructions[120];// HTML stripped, truncated
+  char area[96];         // affected area description (uppercased, truncated)
+  char description[2048]; // HTML stripped, word-boundary cut + "..." at the cap
+  char instructions[256]; // HTML stripped, word-boundary cut + "..." at the cap
   long ends;             // event end (NWS "ends"), UTC epoch seconds; 0 = unknown
 };
 
