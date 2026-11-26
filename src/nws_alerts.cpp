@@ -20,7 +20,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include <cstdlib>   // strtol (numeric HTML entities)
+#include <cstdlib>    // strtol (numeric HTML entities)
+#include <esp_heap_caps.h>   // heap_caps_get_minimum_free_size (failure diagnostics)
 
 #include "config.h"      // userSettings, ALERTS_REFRESH_*_MS
 #include "wifi_conn.h"   // wifiEnsureConnected()
@@ -37,6 +38,12 @@ static const unsigned long NWS_HTTP_HANDSHAKE_S = 10;
 // deserialization filter keeps only features[].properties, and it is freed
 // when alertsFetch() returns (same pattern as weather.cpp).
 static const size_t ALERTS_BODY_CAP = 32768;
+// Pre-sized body buffer (alertsGetCapped). String growth is otherwise
+// ~16-byte-at-a-time reallocs (a 19 KB body is ~1200 reallocs); when the
+// heap is fragmented one of those fails and concat() stops appending
+// silently, leaving a truncated body that then fails to parse. One
+// allocation up front covers a typical metro-area feed (3-5 alerts).
+static const size_t ALERTS_BODY_RESERVE = 20480;
 
 // ---------------------------------------------------------------------------
 //  Cache + cadence state
@@ -389,6 +396,7 @@ static int alertsGetCapped(const char* url, String& body, size_t cap) {
   if (!stream) { http.end(); return 0; }
   const long expect = http.getSize();   // Content-Length; -1 if chunked / unknown
   body = "";
+  body.reserve(ALERTS_BODY_RESERVE);    // one allocation up front (see above)
   size_t total = 0;
   char buf[256];
   bool complete = false;   // true only if the full body was received
@@ -462,6 +470,18 @@ static int alertsGetCapped(const char* url, String& body, size_t cap) {
         inData = false;
       }
     }
+  }
+  if (body.length() != total) {
+    // String::concat() fails silently on a failed allocation: the stream
+    // read on, but the body froze at the last successfully grown size.
+    // Parsing a truncated body would just yield InvalidInput, so treat
+    // this as a transport failure (the 10 s retry may land on a healthier
+    // heap) and log how much was lost.
+    Serial.printf("[ALERTS] body allocation failure: kept %u of %u bytes, min free %u\n",
+                  (unsigned)body.length(), (unsigned)total,
+                  (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT));
+    body = "";
+    return 0;
   }
   http.end();
   if (!complete) return -1;   // truncated body: a failed fetch, not a 200
@@ -562,7 +582,14 @@ bool alertsFetch() {
   const ArduinoJson::DeserializationError err = ArduinoJson::deserializeJson(
       doc, body.c_str(), ArduinoJson::DeserializationOption::Filter(filter));
   if (err) {
-    Serial.printf("[ALERTS] parse failed: %s, cache kept\n", err.c_str());
+    // The body was complete (alertsGetCapped guarantees length == bytes read
+    // and the framing ran to its end), so a failure here points at the
+    // content. Dump size, tail and the deepest heap dip to pinpoint it.
+    const unsigned blen = (unsigned)body.length();
+    Serial.printf("[ALERTS] parse failed: %s, body %u bytes, min free %u, tail: %.24s\n",
+                  err.c_str(), blen,
+                  (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT),
+                  blen > 24 ? body.c_str() + blen - 24 : body.c_str());
     gLastAttemptFailed = true;
     return false;
   }
