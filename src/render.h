@@ -10,8 +10,8 @@ void updateDynamicTexts();        // clock tick + dynamic bands only (no full re
 
 // "WEATHER ALERT" button (NWS active alerts): per-theme hit/draw rectangle -
 // the single source of truth shared by render.cpp (drawing) and touch.cpp
-// (hit test). SKY/SPLIT draw it as a 50x50 square with "WEATHER"/"ALERT"
-// stacked; BASIC/BENTO keep the single-line pill. No-op from
+// (hit test). SKY/SPLIT/BENTO draw it as a 60x40 button with "WEATHER"/
+// "ALERT" stacked; BASIC keeps the single-line pill. No-op from
 // drawAlertButton() when no alert is cached.
 struct AlertBtnRect { int x, y, w, h; };
 AlertBtnRect alertBtnRect(int theme);

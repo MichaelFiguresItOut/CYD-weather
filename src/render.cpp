@@ -979,25 +979,26 @@ static void renderTheme3(const T& t) {
 //  all theme content. Two shapes, both from alertBtnRect() (single source
 //  of truth - touch.cpp hit-tests the same rectangle):
 //
-//  * SKY / SPLIT: a SQUARE right of the temperature with two stacked
-//    lines, "WEATHER" / "ALERT" (Nunito em9: WEATHER = 46 px at scale 1.0):
-//      - SKY:   x160..210, y76..126: the empty space right of the
+//  * SKY / SPLIT / BENTO: one 60x40 button, two stacked lines, "WEATHER" /
+//    "ALERT" in the bitmap GLCD 8px font - the same font/size as the BASIC
+//    pill's line, which reads clearer on glass than Nunito em9 (2026-11-25).
+//    (SKY/SPLIT used to be 50x50 squares right of the temperature; they now
+//    use BENTO's 60x40 size, so all three themes share one button shape.)
+//      - SKY:   x160..220, y80..120: the empty space right of the
 //               temperature (typical "42.8 F" ends x~130; worst-case
 //               "100.0 F" ends x159 -> 1 px clear) and left of the dog zone
-//               (narrowest outfit starts x221 -> 11 px); 2 px above the
-//               description line box (y128), below the clock line box
-//               (ends y~67).
-//      - SPLIT: x158..208 (6 px clear of the stage panel line at x214),
-//               y76..126: centred on the temperature row (80..123); 14 px
-//               clear of the worst-case unit ("F" ends x~144), 2 px above
+//               (narrowest outfit starts x221 -> 1 px); same y as the SPLIT
+//               button, 5 px below the date line box (y62..75), 8 px above
 //               the description line box (y128).
-//  * BENTO: 60x40 at (132,74) - the temp card's old FEELS-chip slot, freed
-//    when the FEELS value moved to the box above the dog card
-//    (drawBentoDogCard). Same stacked "WEATHER" / "ALERT" layout, but in
-//    the bitmap GLCD 8px font - the same font/size as the BASIC pill's
-//    line, which reads clearer on glass than Nunito em9 (2026-11-25). The
-//    temp value (worst-case "100.0 F" at 34 px ends x~130) and the accent
-//    bar (x7..11) stay clear.
+//      - SPLIT: x154..214, y80..120: right edge flush with the stage panel
+//               line at x214 (the FEELS/RAIN chips cross it by design too);
+//               top-aligned with the temperature row (y80); 10 px clear of
+//               the worst-case unit ("F" ends x~144); 8 px above the
+//               description line box (y128).
+//      - BENTO: (132,74) - the temp card's old FEELS-chip slot, freed when
+//               the FEELS value moved to the box above the dog card
+//               (drawBentoDogCard). The temp value (worst-case "100.0 F" at
+//               34 px ends x~130) and the accent bar (x7..11) stay clear.
 //  * BASIC: the old single-line pill in the open bottom-left.
 // ---------------------------------------------------------------------------
 
@@ -1017,8 +1018,8 @@ static const uint16_t ALERT_PILL_BD[4] = {
 
 AlertBtnRect alertBtnRect(int theme) {
   switch (theme) {
-    case THEME_SKY:   return AlertBtnRect{ 160, 76, 50, 50 };   // square, right of temp
-    case THEME_SPLIT: return AlertBtnRect{ 158, 76, 50, 50 };   // square, right of temp
+    case THEME_SKY:   return AlertBtnRect{ 160, 80, 60, 40 };   // BENTO size, right of temp, same y as SPLIT
+    case THEME_SPLIT: return AlertBtnRect{ 154, 80, 60, 40 };   // BENTO size, right edge at the panel line
     case THEME_BENTO: return AlertBtnRect{ 132, 74, 60, 40 };  // old FEELS-chip slot in the temp card
     default:          return AlertBtnRect{ 12, 204, 132, 22 };  // BASIC pill: open bottom-left
   }
@@ -1031,31 +1032,19 @@ void drawAlertButton(int theme, const T& t) {
   const int x = t.X(r.x), y = t.Y(r.y);
   const int w = max(1, t.W(r.w)), h = max(1, t.H(r.h));
 
-  if (theme == THEME_BENTO) {
-    // 60x40 button, two stacked lines in the bitmap GLCD 8px font - the
-    // same font/size as the BASIC pill's "WEATHER ALERT" line, which reads
-    // clearer on glass than Nunito em9 (2026-11-25). Lines at +10/+22: the
-    // 20 px block centres in the 40 px button (10 px top and bottom).
-    // Text: yellow (displays #ffff00) on all four severity boxes - chosen
-    // from the mockups over the black the raw 0xFFFF used to display
-    // (2026-11-26); C() pre-inverts for the panel.
+  if (theme == THEME_BENTO || theme == THEME_SKY || theme == THEME_SPLIT) {
+    // 60x40 button (one size across all three themes), two stacked lines in
+    // the bitmap GLCD 8px font - the same font/size as the BASIC pill's
+    // "WEATHER ALERT" line, which reads clearer on glass than Nunito em9
+    // (2026-11-25). Lines at +10/+22: the 20 px block centres in the 40 px
+    // button (10 px top and bottom); "WEATHER" spans 42 px, leaving 9 px on
+    // each side. Text: yellow (displays #ffff00) on all four severity boxes
+    // - chosen from the mockups over the black the raw 0xFFFF used to
+    // display (2026-11-26); C() pre-inverts for the panel.
     gT->fillRoundRect(x, y, w, h, 8, ALERT_PILL_BG[sv]);
     gT->drawRoundRect(x, y, w, h, 8, ALERT_PILL_BD[sv]);
     drawCenter(t, r.x + r.w / 2, r.y + 10, "WEATHER", 1.0f, C(0xff, 0xff, 0x00), r.w - 6);
     drawCenter(t, r.x + r.w / 2, r.y + 22, "ALERT",   1.0f, C(0xff, 0xff, 0x00), r.w - 6);
-    return;
-  }
-
-  if (theme == THEME_SKY || theme == THEME_SPLIT) {
-    // 50x50 button, two stacked lines in the bitmap GLCD 8px font - same
-    // font/size/color as the BENTO button (2026-11-26, user pick). Lines at
-    // +15/+27: the 20 px block centres in the 50 px button (15 px top and
-    // bottom), same 12 px line pitch as BENTO. "WEATHER" spans 42 px, leaving
-    // 4 px on each side.
-    gT->fillRoundRect(x, y, w, h, 8, ALERT_PILL_BG[sv]);
-    gT->drawRoundRect(x, y, w, h, 8, ALERT_PILL_BD[sv]);
-    drawCenter(t, r.x + r.w / 2, r.y + 15, "WEATHER", 1.0f, C(0xff, 0xff, 0x00), r.w - 6);
-    drawCenter(t, r.x + r.w / 2, r.y + 27, "ALERT",   1.0f, C(0xff, 0xff, 0x00), r.w - 6);
     return;
   }
 
@@ -1101,8 +1090,8 @@ void renderScreen() {
 //                     alert button as a guard (see the branch); the tiny HUM
 //                     line is repainted separately when the data age ticks
 //    theme 2 (SPLIT): clearThemed() over the clock/date band + redraw it,
-//                     plus the alert button (its top border sits inside the
-//                     band, so the wipe would chip it otherwise); the
+//                     plus the alert button as a guard (the band ends row 77,
+//                     above the button's top border at row 80); the
 //                     rain-chip/row-1 area is repainted when the data age ticks
 //    theme 3 (BENTO): clearThemed() over the clock card + redraw it (its text
 //                     is minute-granular, so a pure clock/date tick is a no-op
@@ -1174,9 +1163,10 @@ void updateDynamicTexts() {
 
       drawSkyDecor(userSettings.theme, t);   // sun/moon/clouds/stars live in this band
       drawSkyDynamicBand(t);   // Nunito band (bitmap fallback inside); re-syncs the caches
-      drawAlertButton(THEME_SKY, t);   // guard: the band ends row 75, the button's top
-                                       // border starts row 76 - one more row of band
-                                       // growth would clip it; redrawing keeps it whole
+      drawAlertButton(THEME_SKY, t);   // guard: the band ends row 75, 4 rows above the
+                                       // button's top border (row 80), so the wipe can't
+                                       // reach it - kept for symmetry with SPLIT so a band
+                                       // growth can't chip it silently
     }
     if (tinyChanged) {
       // Band [127..159): covers the description line box (text 129..149, cloud
@@ -1207,8 +1197,10 @@ void updateDynamicTexts() {
     if (clockChanged || dateChanged) {
       clearThemed(THEME_SPLIT, t, 10, 22, 204, 56);   // left-zone rows [22..78): per-row day gradient (bgCode)
       drawSplitClockDate(t);   // re-syncs the clock/date caches
-      drawAlertButton(THEME_SPLIT, t);   // the band reaches row 77: the button's top
-                                         // border (row 76) sits inside it, so restore it
+      drawAlertButton(THEME_SPLIT, t);   // guard: the band ends row 77, above the
+                                         // button's top border (row 80), so the wipe
+                                         // cannot reach it - kept so a band growth
+                                         // can't chip it silently
     }
     if (ageChanged) {
       // Rain-chip/row-1 area: x 12..214 solid, x 214..218 per-row gradient
