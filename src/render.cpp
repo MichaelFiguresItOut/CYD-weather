@@ -356,10 +356,16 @@ static void bffCenter(const T& t, const lgfx::IFont& f, const char* s, int cx, i
 // Shared by the full render and updateDynamicTexts() so they never drift apart.
 static void drawSkyDynamicBand(const T& t) {
   const SkyPal& p = SKY();
+  char clockBuf[16], dateBuf[32];
+  buildClockDateStrings(clockBuf, sizeof(clockBuf), dateBuf, sizeof(dateBuf));
+  // Keep the partial-update cache in sync so a per-second tick right after a
+  // full render (e.g. a format toggle) does not cause a redundant band wipe.
+  strncpy(lastClockBuf, clockBuf, sizeof(lastClockBuf) - 1);
+  lastClockBuf[sizeof(lastClockBuf) - 1] = '\0';
+  strncpy(lastDateBuf, dateBuf, sizeof(lastDateBuf) - 1);
+  lastDateBuf[sizeof(lastDateBuf) - 1] = '\0';
   if (!nunitoOK) {   // original bitmap-font band (legacy behavior)
     drawStatusRow(t, 10, 7, 1.2f, p.stL, p.dot, dayNightLabel(), p.stR, 310, true);
-    char clockBuf[16], dateBuf[32];
-    buildClockDateStrings(clockBuf, sizeof(clockBuf), dateBuf, sizeof(dateBuf));
     drawCenter(t, 160, 19, clockBuf, themeClockFit(1), p.clock, 316);
     drawCenter(t, 160, 62, dateBuf, 1.5f, p.date, 300);
     return;
@@ -378,8 +384,6 @@ static void drawSkyDynamicBand(const T& t) {
   }
 
   // Clock: centered at x=160 (em48). Date: centered at x=160 (em13).
-  char clockBuf[16], dateBuf[32];
-  buildClockDateStrings(clockBuf, sizeof(clockBuf), dateBuf, sizeof(dateBuf));
   bffCenter(t, nunitoF48, clockBuf, 160, 19, p.clock, bffFit(nunitoF48, clockBuf, 316), bgCode(1, 0, 19));
   bffCenter(t, nunitoF13, dateBuf, 160, 62, p.date, bffFit(nunitoF13, dateBuf, 300), bgCode(1, 0, 62));
 }
@@ -640,6 +644,12 @@ static void drawSplitClockDate(const T& t) {
   const SplitPal& p = SPLIT();
   char clockBuf[16], dateBuf[32];
   buildClockDateStrings(clockBuf, sizeof(clockBuf), dateBuf, sizeof(dateBuf));
+  // Keep the partial-update cache in sync so a per-second tick right after a
+  // full render (e.g. a format toggle) does not cause a redundant band wipe.
+  strncpy(lastClockBuf, clockBuf, sizeof(lastClockBuf) - 1);
+  lastClockBuf[sizeof(lastClockBuf) - 1] = '\0';
+  strncpy(lastDateBuf, dateBuf, sizeof(lastDateBuf) - 1);
+  lastDateBuf[sizeof(lastDateBuf) - 1] = '\0';
   if (!nunitoOK) {   // original bitmap-font band (legacy behavior)
     float cs = themeClockFit(THEME_SPLIT);
     gT->setTextSize(cs * t.sx); gT->setTextColor(p.clock);
@@ -965,13 +975,28 @@ static void renderTheme3(const T& t) {
 }
 
 // ---------------------------------------------------------------------------
-//  NWS active alerts - "WEATHER ALERT" pill on the dashboard
+//  NWS active alerts - "WEATHER ALERT" button on the dashboard
 //
 //  Drawn as the last element of every theme (renderTheme) so it sits above
-//  all theme content. Per-theme rects: BASIC/SKY/SPLIT sit in open space;
-//  BENTO has no open space, so the pill replaces the detail card's
-//  least-important row (data age + refresh hint). alertBtnRect() is the
-//  single source of truth - touch.cpp hit-tests the same rectangle.
+//  all theme content. Two shapes, both from alertBtnRect() (single source
+//  of truth - touch.cpp hit-tests the same rectangle):
+//
+//  * SKY / SPLIT: a 50x50 SQUARE right of the temperature with two stacked
+//    lines, "WEATHER" / "ALERT" (Nunito em9: WEATHER = 46 px at scale 1.0,
+//    leaving a 2 px margin inside the square):
+//      - SKY:   x160..210, y76..126: the empty space right of the
+//               temperature (typical "42.8 F" ends x~130; worst-case
+//               "100.0 F" ends x159 -> 1 px clear) and left of the dog zone
+//               (narrowest outfit starts x221 -> 11 px); 2 px above the
+//               description line box (y128), below the clock line box
+//               (ends y~67).
+//      - SPLIT: x158..208 (6 px clear of the stage panel line at x214),
+//               y76..126: centred on the temperature row (80..123); 14 px
+//               clear of the worst-case unit ("F" ends x~144), 2 px above
+//               the description line box (y128).
+//  * BASIC / BENTO: the old single-line pill. BENTO has no open space, so
+//    the pill replaces the detail card's least-important row (data age +
+//    refresh hint).
 // ---------------------------------------------------------------------------
 
 // Severity palette (565), indexed by alertsHighestSeverity().
@@ -990,19 +1015,39 @@ static const uint16_t ALERT_PILL_BD[4] = {
 
 AlertBtnRect alertBtnRect(int theme) {
   switch (theme) {
-    case THEME_SKY:   return AlertBtnRect{ 228, 78, 88, 20 };   // right of the sun, above the dog zone
-    case THEME_SPLIT: return AlertBtnRect{ 224, 150, 92, 22 };  // open middle of the stage panel
-    case THEME_BENTO: return AlertBtnRect{ 12, 216, 184, 14 };  // over the detail card's info line
-    default:          return AlertBtnRect{ 12, 204, 132, 22 };  // BASIC: open bottom-left
+    case THEME_SKY:   return AlertBtnRect{ 160, 76, 50, 50 };   // square, right of temp
+    case THEME_SPLIT: return AlertBtnRect{ 158, 76, 50, 50 };   // square, right of temp
+    case THEME_BENTO: return AlertBtnRect{ 12, 216, 184, 14 };  // pill over the detail card's info line
+    default:          return AlertBtnRect{ 12, 204, 132, 22 };  // BASIC pill: open bottom-left
   }
 }
 
-void drawAlertButton(const T& t) {
+void drawAlertButton(int theme, const T& t) {
   if (!alertsActive()) return;
-  const AlertBtnRect r = alertBtnRect(userSettings.theme);
+  const AlertBtnRect r = alertBtnRect(theme);
   const int sv = alertsHighestSeverity() & 3;
-  gT->fillRoundRect(t.X(r.x), t.Y(r.y), max(1, t.W(r.w)), max(1, t.H(r.h)), 3, ALERT_PILL_BG[sv]);
-  gT->drawRoundRect(t.X(r.x), t.Y(r.y), max(1, t.W(r.w)), max(1, t.H(r.h)), 3, ALERT_PILL_BD[sv]);
+  const int x = t.X(r.x), y = t.Y(r.y);
+  const int w = max(1, t.W(r.w)), h = max(1, t.H(r.h));
+
+  if (theme == THEME_SKY || theme == THEME_SPLIT) {
+    // Square button, two stacked lines, white (severity = button colour).
+    // em9 line boxes are 9 px (ascent 8 + descent 1): line 1 at +15, line 2
+    // at +26 -> the 21 px block centres in the 50 px square.
+    gT->fillRoundRect(x, y, w, h, 8, ALERT_PILL_BG[sv]);
+    gT->drawRoundRect(x, y, w, h, 8, ALERT_PILL_BD[sv]);
+    if (nunitoOK) {
+      bffCenter(t, nunitoF9, "WEATHER", r.x + r.w / 2, r.y + 15, 0xFFFF, 1.0f, ALERT_PILL_BG[sv]);
+      bffCenter(t, nunitoF9, "ALERT",   r.x + r.w / 2, r.y + 26, 0xFFFF, 1.0f, ALERT_PILL_BG[sv]);
+    } else {   // bitmap fallback (GLCD 8 px chars), same 2-line centring
+      drawCenter(t, r.x + r.w / 2, r.y + 15, "WEATHER", 1.0f, 0xFFFF, r.w - 6);
+      drawCenter(t, r.x + r.w / 2, r.y + 26, "ALERT",   1.0f, 0xFFFF, r.w - 6);
+    }
+    return;
+  }
+
+  // Pill (BASIC / BENTO), single line, white (severity = pill colour).
+  gT->fillRoundRect(x, y, w, h, 3, ALERT_PILL_BG[sv]);
+  gT->drawRoundRect(x, y, w, h, 3, ALERT_PILL_BD[sv]);
   drawCenter(t, r.x + r.w / 2, r.y + (r.h - 8) / 2, "WEATHER ALERT", 1.0f, 0xFFFF, r.w - 6);
 }
 
@@ -1013,7 +1058,7 @@ void renderTheme(int idx, const T& t) {
     case 2: renderTheme2(t); break;   // SPLIT
     default: renderTheme3(t); break;  // BENTO
   }
-  drawAlertButton(t);   // last: the pill sits above all theme content
+  drawAlertButton(idx, t);   // last: the button sits above all theme content
 }
 
 // LovyanGFX v1 draws in immediate mode – every call goes straight to the
@@ -1038,9 +1083,12 @@ void renderScreen() {
 //                     plus the data-age line when its minute-granular age ticks
 //    theme 1 (SKY):   clearThemed() over the status/clock/date bands + redraw
 //                     those elements (sky decorations included – they sit in
-//                     the cleared band and are cheap to repaint); the tiny
-//                     HUM line is repainted separately when the data age ticks
-//    theme 2 (SPLIT): clearThemed() over the clock/date band + redraw it; the
+//                     the cleared band and are cheap to repaint), plus the
+//                     alert button as a guard (see the branch); the tiny HUM
+//                     line is repainted separately when the data age ticks
+//    theme 2 (SPLIT): clearThemed() over the clock/date band + redraw it,
+//                     plus the alert button (its top border sits inside the
+//                     band, so the wipe would chip it otherwise); the
 //                     rain-chip/row-1 area is repainted when the data age ticks
 //    theme 3 (BENTO): clearThemed() over the clock card + redraw it (its text
 //                     is minute-granular, so a pure clock/date tick is a no-op
@@ -1109,17 +1157,12 @@ void updateDynamicTexts() {
       // then redraw it. Sky decorations live inside this band and are repainted
       // right after, so nothing is lost.
       clearThemed(userSettings.theme, t, 4, 4, 312, 72);
-      if (clockChanged) {
-        strncpy(lastClockBuf, clockBuf, sizeof(lastClockBuf) - 1);
-        lastClockBuf[sizeof(lastClockBuf) - 1] = '\0';
-      }
-      if (dateChanged) {
-        strncpy(lastDateBuf, dateBuf, sizeof(lastDateBuf) - 1);
-        lastDateBuf[sizeof(lastDateBuf) - 1] = '\0';
-      }
 
       drawSkyDecor(userSettings.theme, t);   // sun/moon/clouds/stars live in this band
-      drawSkyDynamicBand(t);   // Nunito band (bitmap fallback inside)
+      drawSkyDynamicBand(t);   // Nunito band (bitmap fallback inside); re-syncs the caches
+      drawAlertButton(THEME_SKY, t);   // guard: the band ends row 75, the button's top
+                                       // border starts row 76 - one more row of band
+                                       // growth would clip it; redrawing keeps it whole
     }
     if (tinyChanged) {
       // Band [127..159): covers the description line box (text 129..149, cloud
@@ -1149,15 +1192,9 @@ void updateDynamicTexts() {
     const T& t = T::ID;     // screen is exactly 320x240 -> identity transform
     if (clockChanged || dateChanged) {
       clearThemed(THEME_SPLIT, t, 10, 22, 204, 56);   // left-zone rows [22..78): solid bg
-      drawSplitClockDate(t);
-      if (clockChanged) {
-        strncpy(lastClockBuf, clockBuf, sizeof(lastClockBuf) - 1);
-        lastClockBuf[sizeof(lastClockBuf) - 1] = '\0';
-      }
-      if (dateChanged) {
-        strncpy(lastDateBuf, dateBuf, sizeof(lastDateBuf) - 1);
-        lastDateBuf[sizeof(lastDateBuf) - 1] = '\0';
-      }
+      drawSplitClockDate(t);   // re-syncs the clock/date caches
+      drawAlertButton(THEME_SPLIT, t);   // the band reaches row 77: the button's top
+                                         // border (row 76) sits inside it, so restore it
     }
     if (ageChanged) {
       // Rain-chip/row-1 area: x 12..214 solid, x 214..218 per-row gradient
@@ -1197,7 +1234,7 @@ void updateDynamicTexts() {
       const BentoPal& p = BENTO();
       gT->fillRect(t.X(22), t.Y(213), max(1, t.W(166)), 16, p.cardBg);
       drawBentoInfoLine(t);   // re-syncs lastBentoInfo
-      drawAlertButton(t);     // the band wipe covered the pill: redraw it
+      drawAlertButton(THEME_BENTO, t);   // the band wipe covered the pill: redraw it
     }
     return;
   }

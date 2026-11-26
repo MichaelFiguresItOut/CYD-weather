@@ -8,12 +8,14 @@ void renderScreen();              // full redraw (after any persistent setting c
 void renderTheme(int idx, const T& t);   // one theme into a transformed region
 void updateDynamicTexts();        // clock tick + dynamic bands only (no full redraw)
 
-// "WEATHER ALERT" pill (NWS active alerts): per-theme hit/draw rectangle -
+// "WEATHER ALERT" button (NWS active alerts): per-theme hit/draw rectangle -
 // the single source of truth shared by render.cpp (drawing) and touch.cpp
-// (hit test). No-op from drawAlertButton() when no alert is cached.
+// (hit test). SKY/SPLIT draw it as a 50x50 square with "WEATHER"/"ALERT"
+// stacked; BASIC/BENTO keep the single-line pill. No-op from
+// drawAlertButton() when no alert is cached.
 struct AlertBtnRect { int x, y, w, h; };
 AlertBtnRect alertBtnRect(int theme);
-void drawAlertButton(const T& t);
+void drawAlertButton(int theme, const T& t);
 
 // Nunito BFF masters (src/nunito_bff.h): nullptr when the fonts failed to
 // load, in which case callers fall back to the built-in GLCD font. Used by
