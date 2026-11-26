@@ -325,11 +325,15 @@ void drawSplitCloud(const T& t, int x, int y, bool small, uint16_t c) {
   }
 }
 
-// Blend a pre-inverted RGB565 color toward white by pct/100.
+// Blend a pre-inverted RGB565 code toward displayed white by pct/100 and
+// return the pre-inverted code of the result. Displayed white is code 0x0000
+// on this inverting panel, so blending toward it simply scales each code
+// component down by (100-pct)/100.
 uint16_t blendWhite(uint16_t c, int pct) {
-  int r = ((c >> 11) & 31u), g = ((c >> 5) & 63u), b = (c & 31u);
-  auto mix = [pct](int v, int maxv) { return (v * (100 - pct) + maxv * pct) / 100; };
-  return D(mix(r, 31), mix(g, 63), mix(b, 31));
+  int r = ((c >> 11) & 31u) * (100 - pct) / 100;
+  int g = ((c >> 5) & 63u) * (100 - pct) / 100;
+  int b = (c & 31u) * (100 - pct) / 100;
+  return (uint16_t)((r << 11) | (g << 5) | b);
 }
 
 // SPLIT description cloud icon (~14px): three bumps over a flat bottom.
