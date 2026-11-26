@@ -979,9 +979,8 @@ static void renderTheme3(const T& t) {
 //  all theme content. Two shapes, both from alertBtnRect() (single source
 //  of truth - touch.cpp hit-tests the same rectangle):
 //
-//  * SKY / SPLIT / BENTO: a SQUARE right of the temperature with two
-//    stacked lines, "WEATHER" / "ALERT" (Nunito em9: WEATHER = 46 px at
-//    scale 1.0, leaving a 2 px margin inside the button):
+//  * SKY / SPLIT: a SQUARE right of the temperature with two stacked
+//    lines, "WEATHER" / "ALERT" (Nunito em9: WEATHER = 46 px at scale 1.0):
 //      - SKY:   x160..210, y76..126: the empty space right of the
 //               temperature (typical "42.8 F" ends x~130; worst-case
 //               "100.0 F" ends x159 -> 1 px clear) and left of the dog zone
@@ -992,11 +991,13 @@ static void renderTheme3(const T& t) {
 //               y76..126: centred on the temperature row (80..123); 14 px
 //               clear of the worst-case unit ("F" ends x~144), 2 px above
 //               the description line box (y128).
-//      - BENTO:  60x40 at (132,74) - the temp card's old FEELS-chip slot,
-//               freed when the FEELS value moved to the box above the dog
-//               card (drawBentoDogCard). The temp value (worst-case
-//               "100.0 F" at 34 px ends x~130) and the accent bar (x7..11)
-//               stay clear.
+//  * BENTO: 60x40 at (132,74) - the temp card's old FEELS-chip slot, freed
+//    when the FEELS value moved to the box above the dog card
+//    (drawBentoDogCard). Same stacked "WEATHER" / "ALERT" layout, but in
+//    the bitmap GLCD 8px font - the same font/size as the BASIC pill's
+//    line, which reads clearer on glass than Nunito em9 (2026-11-25). The
+//    temp value (worst-case "100.0 F" at 34 px ends x~130) and the accent
+//    bar (x7..11) stay clear.
 //  * BASIC: the old single-line pill in the open bottom-left.
 // ---------------------------------------------------------------------------
 
@@ -1030,22 +1031,31 @@ void drawAlertButton(int theme, const T& t) {
   const int x = t.X(r.x), y = t.Y(r.y);
   const int w = max(1, t.W(r.w)), h = max(1, t.H(r.h));
 
-  if (theme == THEME_SKY || theme == THEME_SPLIT || theme == THEME_BENTO) {
-    // Square button, two stacked lines, white (severity = button colour).
-    // em9 line boxes are 9 px (ascent 8 + descent 1): in the 50 px squares
-    // (SKY/SPLIT) line 1 sits at +15, line 2 at +26 -> the 21 px block
-    // centres; BENTO's 60x40 slot uses +8/+19 for the same balance.
-    const int y1 = (theme == THEME_BENTO) ? r.y + 8  : r.y + 15;
-    const int y2 = (theme == THEME_BENTO) ? r.y + 19 : r.y + 26;
+  if (theme == THEME_BENTO) {
+    // 60x40 button, two stacked lines in the bitmap GLCD 8px font - the
+    // same font/size as the BASIC pill's "WEATHER ALERT" line, which reads
+    // clearer on glass than Nunito em9 (2026-11-25). Lines at +10/+22: the
+    // 20 px block centres in the 40 px button (10 px top and bottom).
+    // Text: yellow (displays #ffff00) on all four severity boxes - chosen
+    // from the mockups over the black the raw 0xFFFF used to display
+    // (2026-11-26); C() pre-inverts for the panel.
     gT->fillRoundRect(x, y, w, h, 8, ALERT_PILL_BG[sv]);
     gT->drawRoundRect(x, y, w, h, 8, ALERT_PILL_BD[sv]);
-    if (nunitoOK) {
-      bffCenter(t, nunitoF9, "WEATHER", r.x + r.w / 2, y1, 0xFFFF, 1.0f, ALERT_PILL_BG[sv]);
-      bffCenter(t, nunitoF9, "ALERT",   r.x + r.w / 2, y2, 0xFFFF, 1.0f, ALERT_PILL_BG[sv]);
-    } else {   // bitmap fallback (GLCD 8 px chars), same 2-line centring
-      drawCenter(t, r.x + r.w / 2, y1, "WEATHER", 1.0f, 0xFFFF, r.w - 6);
-      drawCenter(t, r.x + r.w / 2, y2, "ALERT",   1.0f, 0xFFFF, r.w - 6);
-    }
+    drawCenter(t, r.x + r.w / 2, r.y + 10, "WEATHER", 1.0f, C(0xff, 0xff, 0x00), r.w - 6);
+    drawCenter(t, r.x + r.w / 2, r.y + 22, "ALERT",   1.0f, C(0xff, 0xff, 0x00), r.w - 6);
+    return;
+  }
+
+  if (theme == THEME_SKY || theme == THEME_SPLIT) {
+    // 50x50 button, two stacked lines in the bitmap GLCD 8px font - same
+    // font/size/color as the BENTO button (2026-11-26, user pick). Lines at
+    // +15/+27: the 20 px block centres in the 50 px button (15 px top and
+    // bottom), same 12 px line pitch as BENTO. "WEATHER" spans 42 px, leaving
+    // 4 px on each side.
+    gT->fillRoundRect(x, y, w, h, 8, ALERT_PILL_BG[sv]);
+    gT->drawRoundRect(x, y, w, h, 8, ALERT_PILL_BD[sv]);
+    drawCenter(t, r.x + r.w / 2, r.y + 15, "WEATHER", 1.0f, C(0xff, 0xff, 0x00), r.w - 6);
+    drawCenter(t, r.x + r.w / 2, r.y + 27, "ALERT",   1.0f, C(0xff, 0xff, 0x00), r.w - 6);
     return;
   }
 
