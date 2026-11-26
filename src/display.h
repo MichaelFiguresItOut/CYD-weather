@@ -159,7 +159,8 @@ struct SkyPal {
 };
 
 struct SplitPal {
-  uint16_t left;                      // solid data-zone background
+  uint16_t left;                      // left-zone font-blend base (mid of the day
+                                      // gradient, see bgDisplayed(); not painted)
   uint16_t skyLbl, ground;            // DAY/NIGHT label + ground ellipse
   uint16_t stL, dot;                  // status row (no right label here)
   uint16_t clock, date, temp, unit, descTxt;

@@ -1205,7 +1205,7 @@ void updateDynamicTexts() {
     if (!clockChanged && !dateChanged && !ageChanged) return;   // nothing moves per second
     const T& t = T::ID;     // screen is exactly 320x240 -> identity transform
     if (clockChanged || dateChanged) {
-      clearThemed(THEME_SPLIT, t, 10, 22, 204, 56);   // left-zone rows [22..78): solid bg
+      clearThemed(THEME_SPLIT, t, 10, 22, 204, 56);   // left-zone rows [22..78): per-row day gradient (bgCode)
       drawSplitClockDate(t);   // re-syncs the clock/date caches
       drawAlertButton(THEME_SPLIT, t);   // the band reaches row 77: the button's top
                                          // border (row 76) sits inside it, so restore it
