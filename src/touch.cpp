@@ -62,7 +62,7 @@ static TouchBands touchBands() {
 }
 
 static bool inDogZone(int x, int y) {   // reserved dog corner zone (bottom-right)
-  if (userSettings.theme == THEME_BENTO) return x >= 206 && y >= 66;   // BENTO: whole right column = dog card
+  if (userSettings.theme == THEME_BENTO) return x >= 206 && y >= 66;   // BENTO: whole right column (FEELS box + dog card)
   return x >= tft.width() - gLayout.dogZoneW && y >= tft.height() - gLayout.dogZoneH;
 }
 

@@ -1,0 +1,16 @@
+--- a/.pio/libdeps/esp32dev/LovyanGFX/src/lgfx/v1/lgfx_fonts.cpp
++++ b/.pio/libdeps/esp32dev/LovyanGFX/src/lgfx/v1/lgfx_fonts.cpp
+@@ -174,6 +174,13 @@
+     if (!style->cp437 && (c >= 176))
+     {
+       c++; // Handle 'classic' charset behavior
++      // The shift maps 0xFF to index 256, one past the end of Font0's
++      // 256-glyph table (font0_info declares 0..255, but only 0..254
++      // survive the shift). Fall back to the dummy glyph instead of an
++      // out-of-bounds read. (Font8x8C64, the other GLCDfont, tops out at
++      // c=143 and is unaffected.)
++      if (c > 255)
++        return drawCharDummy(gfx, x, y, this->width, this->height, style, filled_x);
+     }
+ 
+     c -= pgm_read_byte(&info->start);

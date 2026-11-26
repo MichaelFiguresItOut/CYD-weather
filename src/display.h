@@ -173,11 +173,11 @@ struct BentoPal {
   uint16_t clock, date, stL, dot, stR;
   uint16_t accent;                    // orange bar on the temp card
   uint16_t temp, unit;
-  uint16_t chipBg, chipBd, chipLbl, chipVal;   // FEELS chip
+  uint16_t chipBg, chipBd, chipVal;            // FEELS box (right column)
   uint16_t descTxt;
   uint16_t rBg, rBd, rTxt, rDot;      // rain card
   uint16_t detC, updC;                // detail rows / updated row
-  uint16_t dogCardBg, capC;           // dog card + caption
+  uint16_t dogCardBg;                // dog card
 };
 
 // ---- Background + shared drawing helpers (defined in display.cpp) ---

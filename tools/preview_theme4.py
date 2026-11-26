@@ -3,9 +3,12 @@
 
 Mirrors renderTheme3Nunito() (and drawBentoClockCard / drawBentoDogCard) line
 for line: card rectangles, Nunito BFF text at the design sizes, accent bar,
-FEELS chip with crossed-arrows icon, rain card with umbrella/dot, detail rows
-and the centered dog. Colors are passed through RGB565 exactly like the
-firmware's C() macro so the preview matches the panel.
+the (132,74,60,40) WEATHER ALERT button slot (the old FEELS-chip position;
+drawAlertButton is a separate element and not mirrored here), rain card with
+umbrella/dot, detail rows, and the right column: FEELS box (206,66,106,24)
+above the shrunk dog card (206,96,106,136, no caption). Colors are passed
+through RGB565 exactly like the firmware's C() macro so the preview matches
+the panel.
 
 Usage: python tools/preview_theme4.py
 Outputs preview_theme4_day.png / preview_theme4_night.png in the repo root.
@@ -51,11 +54,11 @@ PAL = {
         clock=HX("16325c"), date=HX("4a6fa5"),
         stL=HX("2b6cb0"), dot=HX("2f9e6b"), stR=HX("c77e14"),
         accent=HX("5aa9ff"), temp=HX("16325c"), unit=HX("3d5f8f"),
-        chipBg=HX("e3f1ff"), chipBd=HX("9cc7f5"), chipLbl=HX("2b6cb0"), chipVal=HX("1d4f8c"),
+        chipBg=HX("e3f1ff"), chipBd=HX("9cc7f5"), chipVal=HX("1d4f8c"),
         descTxt=HX("5a7089"),
         rBg=HX("e6f7ec"), rBd=HX("8fd6ae"), rTxt=HX("237a52"), rDot=HX("2f9e6b"),
         detC=HX("7d92ad"), updC=HX("9fb0c4"),
-        dogCardBg=HX("f4f9ff"), capC=HX("7d92ad"),
+        dogCardBg=HX("f4f9ff"),
     ),
     "night": dict(
         bg=HX("131a26"),
@@ -63,11 +66,11 @@ PAL = {
         clock=(255, 255, 255), date=HX("8fa3c0"),
         stL=HX("6fb3ff"), dot=HX("3ecf8e"), stR=HX("ffc857"),
         accent=HX("5aa9ff"), temp=(255, 255, 255), unit=HX("9fc3e8"),
-        chipBg=HX("173a5f"), chipBd=HX("5aa9ff"), chipLbl=HX("9fd0ff"), chipVal=(255, 255, 255),
+        chipBg=HX("173a5f"), chipBd=HX("5aa9ff"), chipVal=(255, 255, 255),
         descTxt=HX("c3d0e4"),
         rBg=HX("12352a"), rBd=HX("2f9e6b"), rTxt=HX("7ee2b8"), rDot=HX("3ecf8e"),
         detC=HX("8fa3c0"), updC=HX("5f7392"),
-        dogCardBg=HX("1a2333"), capC=HX("6f87a8"),
+        dogCardBg=HX("1a2333"),
     ),
 }
 
@@ -83,7 +86,7 @@ RAIN = "NO RAIN EXPECTED"
 D1 = "HUMIDITY 98%"
 D2 = "TODAY H 43.7\u00b0 L 34.5\u00b0"
 REF = "UPD 12:59 AM \u00b7 TOUCH TO REFRESH"
-CAP = "OUTFIT \u00b7 VERY COLD"
+FEELSBOX = f"FEELS {FEELS}"   # drawBentoDogCard: "FEELS " + tempOrDash (unit already in)
 DOG = {"day": "very_cold_sun.png", "night": "very_cold.png"}
 
 
@@ -127,13 +130,6 @@ def draw_dn_icon(img, cx, cy, color, bg, night):   # firmware drawDnIcon (sun / 
         d.ellipse([cx + 2 - 3, cy - 2 - 3, cx + 2 + 3, cy - 2 + 3], fill=bg)   # bite
 
 
-def draw_feels_icon(img, ix, iy, color):   # firmware crossed-arrows (9px box)
-    d = ImageDraw.Draw(img)
-    d.line([(ix + 4, iy + 1), (ix + 4, iy + 8)], fill=color)
-    d.line([(ix + 1, iy + 2), (ix + 8, iy + 7)], fill=color)
-    d.line([(ix + 8, iy + 2), (ix + 1, iy + 7)], fill=color)
-
-
 def draw_dog(img, mode):
     path = os.path.join(ROOT, "dogs", DOG[mode])
     if not os.path.exists(path):
@@ -141,7 +137,7 @@ def draw_dog(img, mode):
     dog = Image.open(path).convert("RGBA")
     fw, fh = dog.size
     x = 206 + (106 - fw) // 2
-    y = 70 + (134 - fh) // 2
+    y = 96 + (136 - fh) // 2   # centred in the (206,96,106,136) card
     img.paste(dog, (x, y), dog)
 
 
@@ -176,15 +172,8 @@ def render(mode):
     uy = int(74 + F48.ascent * ts - F20.ascent * 0.75)
     F20.draw(img, UNIT, 24 + tw + 6, uy, 0.75, p["unit"])
 
-    # ---- FEELS chip (132,74,60,40) -------------------------------------------
-    d.rounded_rectangle([132, 74, 191, 113], radius=10, fill=p["chipBg"])
-    d.rounded_rectangle([132, 74, 190, 112], radius=9, outline=p["chipBd"])
-    ix = 162 - (9 + 3 + F9.width("FEELS")) // 2
-    iy = 81
-    draw_feels_icon(img, ix, iy, p["chipLbl"])
-    F9.draw(img, "FEELS", ix + 9 + 3, 81, 1.0, p["chipLbl"])
-    fvs = F20.fit(FEELS, 44, cap=14 / 20)
-    F20.center(img, FEELS, 162, 95, fvs, p["chipVal"])
+    # (132,74,60,40): the old FEELS-chip slot - now the WEATHER ALERT button
+    # (drawAlertButton, not mirrored here); empty card background otherwise.
 
     # ---- Description row: mini cloud @ (25,113) + em12 text @ (42,112) --------
     draw_mini_cloud(img, 25, 113, p["descTxt"])
@@ -211,10 +200,10 @@ def render(mode):
     F10.draw(img, D2, 22, 207, 1.0, p["detC"])
     F9.draw(img, REF, 22, 221, 1.0, p["updC"])
 
-    # ---- Dog card (206,66,106,166) --------------------------------------------
-    draw_card(img, 206, 66, 106, 166, p["dogCardBg"], p["cardBd"])
-    cap = CAP if cround(F9.width(CAP)) <= 96 else "VERY COLD"
-    F9.center(img, cap, 259, 207, 1.0, p["capC"])
+    # ---- Right column (drawBentoDogCard): FEELS box + dog card ---------------
+    draw_card(img, 206, 66, 106, 24, p["chipBg"], p["chipBd"])   # FEELS box
+    F10.center(img, FEELSBOX, 259, 73, F10.fit(FEELSBOX, 96), p["chipVal"])
+    draw_card(img, 206, 96, 106, 136, p["dogCardBg"], p["cardBd"])   # dog card
     draw_dog(img, mode)
 
     out = os.path.join(ROOT, f"preview_theme4_{mode}.png")

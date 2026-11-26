@@ -817,23 +817,37 @@ static void drawBentoClockCard(const T& t) {
   lastDateBuf[sizeof(lastDateBuf) - 1] = '\0';
 }
 
-// Dog card (206,66,106,166): caption + dog centered in the card above it.
+// Right column: the FEELS box (206,66,106,24) above the dog card (206,96,
+// 106,136). The FEELS value moved out of the temp card's old chip slot (now
+// the WEATHER ALERT button), and the dog card shrank from 106x166 so the box
+// fits in the same 6 px gap rhythm as the left column (clock card ends y60,
+// both columns start y66). The image is centered in the card; no caption.
 static void drawBentoDogCard(const T& t) {
   const BentoPal& p = BENTO();
-  drawCard(t, 206, 66, 106, 166, p.dogCardBg, p.cardBd);
-  if (nunitoOK) {   // "OUTFIT · BAND" (design); plain band label if it does not fit
-    char cap[32];
-    snprintf(cap, sizeof(cap), "OUTFIT \xB7 %s", dogBandLabel());
-    if (bffWidth(nunitoF9, cap) > 96) snprintf(cap, sizeof(cap), "%s", dogBandLabel());
-    bffCenter(t, nunitoF9, cap, 259, 207, p.capC, 1.0f, p.dogCardBg);
+
+  // FEELS box (chip style, r10): "FEELS 31.2 F" (em10) centred. tempOrDash
+  // already ends with the unit char ("31.2 F") - do NOT append it again.
+  char val[16], feels[24];
+  tempOrDash(val, sizeof(val), wx.valid, wx.feelsLike);
+  snprintf(feels, sizeof(feels), "FEELS %s", val);
+  drawCard(t, 206, 66, 106, 24, p.chipBg, p.chipBd);
+  if (nunitoOK) {
+    bffCenter(t, nunitoF10, feels, 259, 73, p.chipVal,
+              bffFit(nunitoF10, feels, 96), p.chipBg);
   } else {
-    drawCenter(t, 259, 207, dogBandLabel(), 1.0f, p.capC, 96);
+    float fs = fitSize(feels, 1.0f, 96);
+    gT->setTextSize(fs * t.sx);
+    gT->setTextColor(p.chipVal);
+    gT->drawString(feels, t.X(259 - gT->textWidth(feels) / 2.0f), t.Y(73));
   }
+
+  // Dog card (106x136): image centred (max image 95x128 -> 4 px margins).
+  drawCard(t, 206, 96, 106, 136, p.dogCardBg, p.cardBd);
   int fw = dogWidth();
   if (fw > 0) {
     int fh = dogHeight();
     int xFull = 206 + (106 - fw) / 2;
-    int yTopFull = 70 + (134 - fh) / 2;   // centered in [70,204], above the caption
+    int yTopFull = 96 + (136 - fh) / 2;   // centred in the card
     drawDogBox(t, xFull, yTopFull, fw, fh, THEME_BENTO);
   }
 }
@@ -859,15 +873,10 @@ static void renderTheme3Legacy(const T& t) {
   gT->setTextSize(2.0f * t.sx); gT->setTextColor(p.unit);
   gT->drawString(tempUnitChar(), t.X(24 + tw + 5), t.Y(74 + 8 * ts - 16));
 
-  // FEELS chip [132,74,60,40]
-  char feels[16]; tempOrDash(feels, sizeof(feels), wx.valid, wx.feelsLike);
-  gT->fillRoundRect(t.X(132), t.Y(74), max(2, t.W(60)), max(2, t.H(40)), (int)(8 * t.sx + 0.5f), p.chipBg);
-  gT->drawRoundRect(t.X(132), t.Y(74), max(1, t.W(60) - 1), max(1, t.H(40) - 1), (int)(7 * t.sx + 0.5f), p.chipBd);
-  drawCenter(t, 162, 82, "FEELS", 1.0f, p.chipLbl, 52);
-  float fv = fitSize(feels, 2.0f, 52);
-  gT->setTextSize(fv); int fw2 = gT->textWidth(feels);
-  gT->setTextSize(fv * t.sx); gT->setTextColor(p.chipVal);
-  gT->drawString(feels, t.X(162 - fw2 / 2.0f), t.Y(96));
+  // (132,74,60,40): the old FEELS chip slot - now the WEATHER ALERT button
+  // (drawAlertButton, last element of renderTheme) while an alert is cached,
+  // empty card background otherwise. The FEELS value lives in the box above
+  // the dog card (drawBentoDogCard).
 
   // Description row inside the temp card: mini cloud + text
   const char* desc = wx.valid ? wx.description.c_str() : "No weather data";
@@ -900,7 +909,8 @@ static void renderTheme3Nunito(const T& t) {
 
   drawBentoClockCard(t);                        // clock card
 
-  // ---- Temp card (design 192x72): accent bar + 34px number + FEELS chip ----
+  // ---- Temp card (design 192x72): accent bar + 34px number; the (132,74,
+  //      60,40) chip slot is the WEATHER ALERT button (drawAlertButton) ----
   drawCard(t, 8, 66, 192, 72, p.cardBg, p.cardBd);
   gT->fillRoundRect(t.X(7), t.Y(74), max(1, t.W(4)), max(1, t.H(56)),
                     (int)(2 * t.sx + 0.5f), p.accent);   // design .accent
@@ -914,22 +924,10 @@ static void renderTheme3Nunito(const T& t) {
           (int)(74 + nunitoF48.ascent * ts - nunitoF20.ascent * us),
           p.unit, us, p.cardBg);
 
-  // FEELS chip (design 60x40 at (132,74), r10): crossed-arrows icon (9px) +
-  // "FEELS" (em9) over the value (em20 @ 14px).
-  gT->fillRoundRect(t.X(132), t.Y(74), max(2, t.W(60)), max(2, t.H(40)),
-                    (int)(10 * t.sx + 0.5f), p.chipBg);
-  gT->drawRoundRect(t.X(132), t.Y(74), max(1, t.W(59)), max(1, t.H(39)),
-                    (int)(9 * t.sx + 0.5f), p.chipBd);
-  int ix = 162 - (9 + 3 + bffWidth(nunitoF9, "FEELS")) / 2;   // icon(9) + gap(3) + label
-  int iy = 81;
-  gT->drawLine(t.X(ix + 4), t.Y(iy + 1), t.X(ix + 4), t.Y(iy + 8), p.chipLbl);
-  gT->drawLine(t.X(ix + 1), t.Y(iy + 2), t.X(ix + 8), t.Y(iy + 7), p.chipLbl);
-  gT->drawLine(t.X(ix + 8), t.Y(iy + 2), t.X(ix + 1), t.Y(iy + 7), p.chipLbl);
-  bffText(t, nunitoF9, "FEELS", ix + 9 + 3, 81, p.chipLbl, 1.0f, p.chipBg);
-  char feels[16]; tempOrDash(feels, sizeof(feels), wx.valid, wx.feelsLike);
-  float fvs = bffFit(nunitoF20, feels, 44);
-  if (fvs > 14.0f / 20.0f) fvs = 14.0f / 20.0f;            // design .fval = 14px
-  bffCenter(t, nunitoF20, feels, 162, 95, p.chipVal, fvs, p.chipBg);
+  // (132,74,60,40): the old FEELS chip slot - now the WEATHER ALERT button
+  // (drawAlertButton, last element of renderTheme) while an alert is cached,
+  // empty card background otherwise. The FEELS value lives in the box above
+  // the dog card (drawBentoDogCard).
 
   // Description row inside the temp card (design y=112): cloud + em12 text
   const char* desc = wx.valid ? wx.description.c_str() : "No weather data";
@@ -981,9 +979,9 @@ static void renderTheme3(const T& t) {
 //  all theme content. Two shapes, both from alertBtnRect() (single source
 //  of truth - touch.cpp hit-tests the same rectangle):
 //
-//  * SKY / SPLIT: a 50x50 SQUARE right of the temperature with two stacked
-//    lines, "WEATHER" / "ALERT" (Nunito em9: WEATHER = 46 px at scale 1.0,
-//    leaving a 2 px margin inside the square):
+//  * SKY / SPLIT / BENTO: a SQUARE right of the temperature with two
+//    stacked lines, "WEATHER" / "ALERT" (Nunito em9: WEATHER = 46 px at
+//    scale 1.0, leaving a 2 px margin inside the button):
 //      - SKY:   x160..210, y76..126: the empty space right of the
 //               temperature (typical "42.8 F" ends x~130; worst-case
 //               "100.0 F" ends x159 -> 1 px clear) and left of the dog zone
@@ -994,9 +992,12 @@ static void renderTheme3(const T& t) {
 //               y76..126: centred on the temperature row (80..123); 14 px
 //               clear of the worst-case unit ("F" ends x~144), 2 px above
 //               the description line box (y128).
-//  * BASIC / BENTO: the old single-line pill. BENTO has no open space, so
-//    the pill replaces the detail card's least-important row (data age +
-//    refresh hint).
+//      - BENTO:  60x40 at (132,74) - the temp card's old FEELS-chip slot,
+//               freed when the FEELS value moved to the box above the dog
+//               card (drawBentoDogCard). The temp value (worst-case
+//               "100.0 F" at 34 px ends x~130) and the accent bar (x7..11)
+//               stay clear.
+//  * BASIC: the old single-line pill in the open bottom-left.
 // ---------------------------------------------------------------------------
 
 // Severity palette (565), indexed by alertsHighestSeverity().
@@ -1017,7 +1018,7 @@ AlertBtnRect alertBtnRect(int theme) {
   switch (theme) {
     case THEME_SKY:   return AlertBtnRect{ 160, 76, 50, 50 };   // square, right of temp
     case THEME_SPLIT: return AlertBtnRect{ 158, 76, 50, 50 };   // square, right of temp
-    case THEME_BENTO: return AlertBtnRect{ 12, 216, 184, 14 };  // pill over the detail card's info line
+    case THEME_BENTO: return AlertBtnRect{ 132, 74, 60, 40 };  // old FEELS-chip slot in the temp card
     default:          return AlertBtnRect{ 12, 204, 132, 22 };  // BASIC pill: open bottom-left
   }
 }
@@ -1029,23 +1030,26 @@ void drawAlertButton(int theme, const T& t) {
   const int x = t.X(r.x), y = t.Y(r.y);
   const int w = max(1, t.W(r.w)), h = max(1, t.H(r.h));
 
-  if (theme == THEME_SKY || theme == THEME_SPLIT) {
+  if (theme == THEME_SKY || theme == THEME_SPLIT || theme == THEME_BENTO) {
     // Square button, two stacked lines, white (severity = button colour).
-    // em9 line boxes are 9 px (ascent 8 + descent 1): line 1 at +15, line 2
-    // at +26 -> the 21 px block centres in the 50 px square.
+    // em9 line boxes are 9 px (ascent 8 + descent 1): in the 50 px squares
+    // (SKY/SPLIT) line 1 sits at +15, line 2 at +26 -> the 21 px block
+    // centres; BENTO's 60x40 slot uses +8/+19 for the same balance.
+    const int y1 = (theme == THEME_BENTO) ? r.y + 8  : r.y + 15;
+    const int y2 = (theme == THEME_BENTO) ? r.y + 19 : r.y + 26;
     gT->fillRoundRect(x, y, w, h, 8, ALERT_PILL_BG[sv]);
     gT->drawRoundRect(x, y, w, h, 8, ALERT_PILL_BD[sv]);
     if (nunitoOK) {
-      bffCenter(t, nunitoF9, "WEATHER", r.x + r.w / 2, r.y + 15, 0xFFFF, 1.0f, ALERT_PILL_BG[sv]);
-      bffCenter(t, nunitoF9, "ALERT",   r.x + r.w / 2, r.y + 26, 0xFFFF, 1.0f, ALERT_PILL_BG[sv]);
+      bffCenter(t, nunitoF9, "WEATHER", r.x + r.w / 2, y1, 0xFFFF, 1.0f, ALERT_PILL_BG[sv]);
+      bffCenter(t, nunitoF9, "ALERT",   r.x + r.w / 2, y2, 0xFFFF, 1.0f, ALERT_PILL_BG[sv]);
     } else {   // bitmap fallback (GLCD 8 px chars), same 2-line centring
-      drawCenter(t, r.x + r.w / 2, r.y + 15, "WEATHER", 1.0f, 0xFFFF, r.w - 6);
-      drawCenter(t, r.x + r.w / 2, r.y + 26, "ALERT",   1.0f, 0xFFFF, r.w - 6);
+      drawCenter(t, r.x + r.w / 2, y1, "WEATHER", 1.0f, 0xFFFF, r.w - 6);
+      drawCenter(t, r.x + r.w / 2, y2, "ALERT",   1.0f, 0xFFFF, r.w - 6);
     }
     return;
   }
 
-  // Pill (BASIC / BENTO), single line, white (severity = pill colour).
+  // Pill (BASIC), single line, white (severity = pill colour).
   gT->fillRoundRect(x, y, w, h, 3, ALERT_PILL_BG[sv]);
   gT->drawRoundRect(x, y, w, h, 3, ALERT_PILL_BD[sv]);
   drawCenter(t, r.x + r.w / 2, r.y + (r.h - 8) / 2, "WEATHER ALERT", 1.0f, 0xFFFF, r.w - 6);
@@ -1229,12 +1233,18 @@ void updateDynamicTexts() {
       drawBentoClockCard(t);               // redraws the card + re-syncs the cache
     }
     if (ageChanged) {
-      // Detail-card line band: interior rows [213..229) of the flat card fill
-      // (card box [8,184] 192x48; the d2 row above ends at y~210).
+      // Info-line band [218..230): the info line (em9) has line box
+      // [221..230), so the band covers it exactly (174 px = its text budget,
+      // so the old line's tail is fully cleared). It starts 2 rows below the
+      // TODAY line's line box [207..217) - the old band [213..229) began 4
+      // rows inside it and erased the bottom of the "TODAY H .. L .." glyphs
+      // every minute the age ticked; only the info line was repainted, so the
+      // clip stayed until the next full render.
       const BentoPal& p = BENTO();
-      gT->fillRect(t.X(22), t.Y(213), max(1, t.W(166)), 16, p.cardBg);
+      gT->fillRect(t.X(22), t.Y(218), max(1, t.W(174)), 12, p.cardBg);
       drawBentoInfoLine(t);   // re-syncs lastBentoInfo
-      drawAlertButton(THEME_BENTO, t);   // the band wipe covered the pill: redraw it
+      // (No alert-button redraw: the WEATHER ALERT button sits in the temp
+      //  card's chip slot (132,74,60,40), far from this band.)
     }
     return;
   }
