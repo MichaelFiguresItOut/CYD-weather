@@ -178,8 +178,10 @@ uint16_t bgDisplayed(int idx, int xFull, int yFull) {
       if (!nightMode()) lerpRgb(0x7c,0xc0,0xec, 0xb5,0xdc,0xf6, t, r,g,b);
       else              lerpRgb(0x1c,0x3f,0x74, 0x0e,0x25,0x49, t, r,g,b);
       return D(r,g,b);
-    default:  // BENTO: solid
-      return nightMode() ? D(0x13,0x1a,0x26) : D(0xee,0xf4,0xfa);
+    default:  // BENTO: solid at night; day = the SKY day gradient (blue
+      // backdrop behind the white cards - mockup 3)
+      if (nightMode()) return D(0x13,0x1a,0x26);
+      return bgDisplayed(THEME_SKY, xFull, yFull);
   }
 }
 uint16_t bgCode(int idx, int xFull, int yFull) { return ~bgDisplayed(idx, xFull, yFull) & 0xFFFF; }
