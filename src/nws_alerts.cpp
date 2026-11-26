@@ -48,6 +48,7 @@ static uint32_t   gLastAttemptMs = 0;   // millis() of the last fetch attempt
 static uint32_t   gLastSuccessMs = 0;   // millis() of the last successful fetch
 static bool       gForce = true;        // boot: fetch as soon as Wi-Fi is up
 static uint32_t   gSig = 0;             // fingerprint of the committed cache
+static bool       gLastAttemptFailed = false;   // most recent fetch didn't commit
 
 // FNV-1a over count + (severity, event, ends) of each cached alert: cheap
 // enough to answer "did the set change" for the redraw decision.
@@ -386,9 +387,11 @@ static int alertsGetCapped(const char* url, String& body, size_t cap) {
 
   WiFiClient* stream = http.getStreamPtr();
   if (!stream) { http.end(); return 0; }
+  const long expect = http.getSize();   // Content-Length; -1 if chunked / unknown
   body = "";
   size_t total = 0;
   char buf[256];
+  bool complete = false;   // true only if the full body was received
 
   int first = -1;   // first non-whitespace body byte
   for (;;) {
@@ -406,6 +409,9 @@ static int alertsGetCapped(const char* url, String& body, size_t cap) {
       body.concat(buf, (unsigned int)n);   // exact-length append; not NUL-terminated
       total += (size_t)n;
     }
+    // A Content-Length we didn't fill means the connection dropped mid-body
+    // (or the cap was hit): the document is truncated and unparseable.
+    complete = (expect < 0) ? true : (total >= (size_t)expect);
   } else {
     // Chunked framing: "<hex-size>\r\n<data>\r\n ... 0\r\n\r\n".
     bool done = (first < 0);
@@ -433,7 +439,7 @@ static int alertsGetCapped(const char* url, String& body, size_t cap) {
         char* endp = nullptr;
         const unsigned long size = strtoul(line, &endp, 16);
         if (endp == line || *endp != 0) { done = true; break; }  // not a size
-        if (size == 0) break;                                    // terminating
+        if (size == 0) { complete = true; break; }               // terminating chunk
         chunkLeft = (size_t)size;
         inData = true;
         continue;
@@ -458,6 +464,7 @@ static int alertsGetCapped(const char* url, String& body, size_t cap) {
     }
   }
   http.end();
+  if (!complete) return -1;   // truncated body: a failed fetch, not a 200
   return code;
 }
 
@@ -494,8 +501,12 @@ bool alertsDue() {
   // The floor between attempts must never block the very first attempt
   // (gLastAttemptMs == 0): otherwise a location set within the first 60 s
   // after boot waits out the whole floor before its first alert check.
-  const bool gapOk = (gLastAttemptMs == 0) ||
-                     (now - gLastAttemptMs >= ALERTS_MIN_GAP_MS);
+  // A failed attempt retries sooner (ALERTS_RETRY_FAIL_MS) so a transient
+  // truncation right after boot doesn't hold the pill back for the full
+  // floor; a committed cache keeps the normal gap.
+  const uint32_t gapMs = gLastAttemptFailed ? ALERTS_RETRY_FAIL_MS
+                                            : ALERTS_MIN_GAP_MS;
+  const bool gapOk = (gLastAttemptMs == 0) || (now - gLastAttemptMs >= gapMs);
   if (!gapOk) return false;
   if (gForce) return true;
   if (gLastSuccessMs == 0) return true;   // never succeeded: keep retrying
@@ -520,6 +531,7 @@ bool alertsFetch() {
 
   if (!wifiEnsureConnected()) {
     Serial.println("[ALERTS] no WiFi, skipped");
+    gLastAttemptFailed = true;
     return false;
   }
 
@@ -531,7 +543,9 @@ bool alertsFetch() {
   String body;
   const int code = alertsGetCapped(url, body, ALERTS_BODY_CAP);
   if (code != HTTP_CODE_OK) {
-    Serial.printf("[ALERTS] fetch failed (HTTP %d), cache kept\n", code);
+    Serial.printf("[ALERTS] fetch failed (HTTP %d)%s, cache kept\n", code,
+                  code < 0 ? " [truncated]" : "");
+    gLastAttemptFailed = true;
     return false;
   }
 
@@ -549,6 +563,7 @@ bool alertsFetch() {
       doc, body.c_str(), ArduinoJson::DeserializationOption::Filter(filter));
   if (err) {
     Serial.printf("[ALERTS] parse failed: %s, cache kept\n", err.c_str());
+    gLastAttemptFailed = true;
     return false;
   }
 
@@ -588,6 +603,7 @@ bool alertsFetch() {
 
   gCount = n;
   gLastSuccessMs = millis();
+  gLastAttemptFailed = false;
   const uint32_t sig = signatureOf(gAlerts, n);
   const bool changed = (sig != gSig);
   gSig = sig;
