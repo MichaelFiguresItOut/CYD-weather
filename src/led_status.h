@@ -19,7 +19,7 @@
 //                        covered (nwsCovered; outside-coverage non-US sites
 //                        never raise this) — or an explicit error warning is
 //                        on screen (ledAdvisoryOn), e.g. the "NO FREE SLOTS"
-//                        line on SAVE LOCATIONS.
+//                        line on LOCATION.
 //
 //  Exactly one color is on at a time; priority is always
 //  BLUE > RED > GREEN (a running activity is never reported as green or
@@ -54,7 +54,7 @@ void ledActivityBegin();
 void ledActivityEnd();
 
 // While an explicit user-visible error warning is displayed (e.g. the
-// "NO FREE SLOTS" line on the SAVE LOCATIONS page, "LOOKUP FAILED" on the
+// "NO FREE SLOTS" line on the LOCATION page, "LOOKUP FAILED" on the
 // location-lookup page), keep the LED red unless an activity is running.
 // Clear it when the message is dismissed or replaced — ledRecompute() then
 // re-evaluates the persistent conditions.

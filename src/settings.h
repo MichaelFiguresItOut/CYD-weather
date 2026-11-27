@@ -11,8 +11,8 @@
 //
 //    APPEARANCE   - display theme (4 choices; day/night is automatic),
 //                   temp unit, clock format, date format
-//    LOCATION     - add location (postal code or city), info rows, saved
-//                   location profiles
+//    LOCATION     - add location (postal code or city), saved location
+//                   profiles (save / restore / clear, up to 3), time zone
 //    WI-FI        - network scan + join (QWERTY keyboard for credentials),
 //                   manual SSID entry, radio on/off, restore the build-time
 //                   network (erases user-saved credentials)

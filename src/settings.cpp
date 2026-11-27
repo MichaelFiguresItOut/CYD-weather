@@ -6,12 +6,12 @@
 //    MAIN         – APPEARANCE / LOCATION / WI-FI / STATIONS
 //    APPEARANCE   – theme (cycles 4), °F/°C, 12/24 h, date format
 //    LOCATION     – current location (display), ADD LOCATION (QWERTY +
-//                   geocode lookup), SAVE LOCATIONS (Phase 7), latitude /
-//                   longitude / time zone (display only: the zone follows
-//                   the location, resolved on each weather fetch)
-//    SAVE LOC.    – Phase 7: save the current location + station
-//                   configuration as a named profile (up to 3), restore
-//                   one, clear one (with confirmation)
+//                   geocode lookup), SAVE CURRENT + the up-to-3 saved
+//                   location profiles (Phase 7: restore one, clear one
+//                   with confirmation), time zone (display only: the zone
+//                   follows the location, resolved on each weather fetch;
+//                   the coordinates are tracked internally for the weather
+//                   data but no longer displayed)
 //    POSTAL       – location lookup (postal code or city): searching
 //                   status (OPEN-METEO / NOMINATIM), then results (tap one
 //                   to apply) or a no-match / failure message
@@ -66,7 +66,7 @@ namespace {
 
 enum Page { PAGE_MAIN, PAGE_APPEARANCE, PAGE_WEATHER, PAGE_WIFI,
             PAGE_SCAN, PAGE_POSTAL, PAGE_STATIONS,
-            PAGE_STN_SCAN, PAGE_CONFIRM, PAGE_SAVELOC, PAGE_RESTORE,
+            PAGE_STN_SCAN, PAGE_CONFIRM, PAGE_RESTORE,
             PAGE_TEMP };
 
 // --- Geometry (320x240) ------------------------------------------------
@@ -79,23 +79,23 @@ constexpr int ROW_Y0     = 34, ROW_H = 36, ROW_GAP = 3;        // up to 5 rows
 // Red CLEAR / RESET button (bottom of the LOCATION / WI-FI pages and the
 // confirmation page): full width, fixed height.
 constexpr int RESET_BTN_H  = 28;
-// LOCATION page layout: CURRENT LOCATION (display row 0), the ADD
-// LOCATION + SAVE LOCATIONS buttons (Phase 7, fixed y — the standard
-// 39 px row stride would collide with the red reset button below), then
-// the plain-text info rows (lat/lon/timezone).
-constexpr int LOC_ADD_Y        = 72;   // ADD LOCATION button top
-constexpr int LOC_SAVE_Y       = 104;  // SAVE LOCATIONS button top (Phase 7)
-constexpr int LOC_BTN_H        = 30;   // height of both location buttons
-constexpr int LOC_INFO_Y0      = 140;  // first info row (LATITUDE)
-constexpr int LOC_INFO_PITCH   = 12;   // info row spacing
-
-// SAVE LOCATIONS page (Phase 7): SAVE CURRENT button + three 30 px
-// profile rows (RESTORE left 75 % / CLEAR right 25 %) + a result line.
-constexpr int SL_SAVE_Y   = 34;   // SAVE CURRENT button top
-constexpr int SL_BTN_H    = 30;   // button / row height
-constexpr int SL_ROW_Y0   = 72;   // first profile row top
-constexpr int SL_GAP      = 6;    // spacing between rows
-constexpr int SL_LEFT_W   = 234;  // RESTORE area (75 % of the 312 px row)
+// LOCATION page layout (the old SAVE LOCATIONS page is merged in):
+// the CURRENT LOCATION display, the ADD LOCATION + SAVE CURRENT
+// buttons, the three one-line profile rows (Phase 7), the red
+// CLEAR / RESET button and the bottom status line (the pending
+// profile result message or the resolved timezone name). The
+// coordinates are tracked internally (weather data) but no longer
+// displayed.
+constexpr int LOC_CURR_Y   = 32;   // "CURRENT LOCATION" label top
+constexpr int LOC_VAL_Y    = 46;   // location value top (size 2)
+constexpr int LOC_ADD_Y    = 66;   // ADD LOCATION button top
+constexpr int LOC_SAVE_Y   = 92;   // SAVE CURRENT button top (Phase 7)
+constexpr int LOC_BTN_H    = 22;   // height of both location buttons
+constexpr int PROF_ROW_Y0  = 116;  // first profile row top
+constexpr int PROF_ROW_H   = 20;   // profile row height (one line)
+constexpr int PROF_GAP     = 4;    // spacing between profile rows
+constexpr int PROF_LEFT_W  = 234;  // RESTORE area (75 % of the 312 px row)
+constexpr int LOC_MSG_Y    = 220;  // bottom status line (MC_DATUM center y)
 // The WI-FI page uses compact rows (no footer) so the red reset button
 // fits at the bottom of the 240 px screen.
 constexpr int WIFI_ROW_Y0  = 66;
@@ -170,10 +170,10 @@ char wifiMsg[48] = "";        // transient status ("JOINING...", "FAILED", ...)
 enum ResetTarget { RT_NONE, RT_LOCATION, RT_WIFI, RT_PROFILE };
 int  resetTarget = RT_NONE;
 int  profClearIdx = -1;        // profile slot the CLEAR confirmation is about
-char profMsg[48] = "";         // SAVE LOCATIONS page result line
+char profMsg[48] = "";         // LOCATION page bottom status line (result)
 bool profMsgGood = false;      // result line color (true = neutral)
-// RESTORE page (transient, between SAVE LOCATIONS and LOCATION): the
-// centered status line while a tapped profile is applied + the weather
+// RESTORE page (transient, after a tap on a saved profile row): the
+// centered status line while the tapped profile is applied + the weather
 // is refetched — same pattern as the ADD LOCATION status lines
 // (RST_SEARCHING = in progress, RST_MSG = terminal message).
 enum RstPhase { RST_SEARCHING, RST_MSG };
@@ -202,7 +202,6 @@ NwsStation stn[STN_MAX];
 int  stnCount = 0;
 int  stnPage = 0;
 void drawStnScan();   // used by draw() before its definition below
-void drawSaveLoc();   // used by draw() before its definition below
 
 // LovyanGFX 1.3: textWidth() no longer takes a built-in font number —
 // measure with the text style (same pattern as the rest of the codebase).
@@ -381,24 +380,6 @@ void drawListRow(int i, const char* l, const char* value, bool sel, bool warn = 
   }
 }
 
-// Plain info row (no button chrome): hint label left, light value right —
-// data, not an action (LOCATION page: coordinates / timezone). Text sits
-// directly on the dark page bg, so it uses the colBgTxt/colHint light
-// colors (colText/colDim are the dark colors for the white rows).
-void drawInfoRow(int y, const char* label, const char* value) {
-  tft.setTextDatum(TL_DATUM);
-  tft.setTextSize(1);
-  tft.setTextColor(colHint);
-  tft.drawString(label, ROW_X + 10, y);
-  char val[48];
-  int vMax = 308 - (ROW_X + 10 + txtW(label, 1)) - 8;
-  if (vMax < 20) vMax = 20;
-  truncText(value, 1, vMax, val, sizeof(val));
-  tft.setTextDatum(TR_DATUM);
-  tft.setTextColor(colBgTxt);
-  tft.drawString(val, 308, y);
-}
-
 // WI-FI page compact rows: top edge of row i (1..4) and the row under y.
 int wifiRowY(int i) { return WIFI_ROW_Y0 + (i - 1) * (WIFI_ROW_H + WIFI_ROW_GAP); }
 int wifiRowAt(int16_t y) {
@@ -413,8 +394,8 @@ int wifiRowAt(int16_t y) {
 // Top edge of the red CLEAR / RESET button on the current page (-1: none).
 int resetBtnY() {
   switch (page) {
-    case PAGE_WEATHER:   // LOCATION: the info rows end at 172 (Phase 7)
-      return 176;
+    case PAGE_WEATHER:   // LOCATION: the profile rows end at 184
+      return 186;
     case PAGE_WIFI:      // compact rows end at 200 (no footer on this page)
       return 204;
     case PAGE_CONFIRM:
@@ -588,7 +569,7 @@ void drawMain() {
   drawHeader("SETTINGS", false);
   const char* items[5][2] = {
     { "APPEARANCE",  "theme - units - clock - date" },
-    { "LOCATION",    "add location - zone - lat/lon" },
+    { "LOCATION",    "add / save locations - zone" },
     { "WI-FI",       "networks - join - add" },
     { "STATIONS",    "data source - local NWS station" },
     { "TEMP RANGES", "dog outfit temperatures" },
@@ -612,18 +593,60 @@ void drawAppearance() {
   drawFooter("TAP TO CHANGE");
 }
 
+// LOCATION page profile row (Phase 7, one line): a saved profile shows
+// "NAME - PLACE" (size 1, trimmed) on the left 75 % — tap to restore —
+// plus a red CLEAR box (right 25 %); the active profile (whose stored
+// location equals the current one) is the row on the yellow accent
+// background (the red CLEAR box is unchanged). An empty slot shows a
+// dim EMPTY row — tapping it saves the current location there (like
+// SAVE CURRENT).
+void drawProfileRow(int i, int y) {
+  const LocationProfile* p = profileGet(i);
+  if (!p) {
+    tft.fillRoundRect(ROW_X, y, ROW_W, PROF_ROW_H, 6, colRowBg);
+    tft.drawRoundRect(ROW_X, y, ROW_W, PROF_ROW_H, 6, colRowBd);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextSize(1);
+    tft.setTextColor(colDim);
+    tft.drawString("EMPTY", ROW_X + ROW_W / 2, y + PROF_ROW_H / 2 + 1);
+    return;
+  }
+  const bool act = (profileActive() == i);
+  char line[96], fit[96];
+  snprintf(line, sizeof(line), "%s - %s", p->name,
+           p->placeName[0] ? p->placeName : p->postalCode);
+  truncText(line, 1, PROF_LEFT_W - 14, fit, sizeof(fit));
+  tft.fillRoundRect(ROW_X, y, PROF_LEFT_W, PROF_ROW_H, 6,
+                    act ? colBtnBg : (sGrid == 3 + i ? colRowSel : colRowBg));
+  tft.drawRoundRect(ROW_X, y, PROF_LEFT_W, PROF_ROW_H, 6,
+                    act ? colBtnBd : colRowBd);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextSize(1);
+  tft.setTextColor(act ? colBtnTxt : colText);
+  tft.drawString(fit, ROW_X + 8, y + 6);
+  // CLEAR (right 25 %) — always a red box, on the active row too.
+  tft.fillRoundRect(ROW_X + PROF_LEFT_W, y, ROW_W - PROF_LEFT_W, PROF_ROW_H, 6,
+                    colDanger);
+  tft.drawRoundRect(ROW_X + PROF_LEFT_W, y, ROW_W - PROF_LEFT_W, PROF_ROW_H,
+                    6, colDangerBd);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(C(0xFF, 0xFF, 0xFF));
+  tft.drawString("CLEAR", ROW_X + PROF_LEFT_W + (ROW_W - PROF_LEFT_W) / 2,
+                 y + PROF_ROW_H / 2 + 1);
+}
+
 void drawWeather() {
   tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
   drawHeader("LOCATION", false);
-  // Row 0: the resolved location as plain display text — deliberately
-  // without the white button styling (see the WI-FI page's CURRENT
-  // NETWORK row); only the ADD LOCATION / SAVE LOCATIONS buttons below
-  // are tappable. Shows "City, Region, CC" plus the postal code when
-  // known; "--" when the location is not resolved yet.
+  // The resolved location as plain display text — deliberately without
+  // the white button styling (see the WI-FI page's CURRENT NETWORK
+  // row). Shows "City, Region, CC" plus the postal code when known;
+  // "--" when the location is not resolved yet. The coordinates stay
+  // tracked internally (weather data) but are no longer displayed.
   tft.setTextDatum(TL_DATUM);
   tft.setTextSize(1);
   tft.setTextColor(colHint);
-  tft.drawString("CURRENT LOCATION", ROW_X + 10, ROW_Y0 + 8);
+  tft.drawString("CURRENT LOCATION", ROW_X + 10, LOC_CURR_Y);
   // Phase 7: the active-profile marker (the current location is a saved
   // profile): "* NAME" right-aligned on the label line.
   {
@@ -634,7 +657,7 @@ void drawWeather() {
       tft.setTextDatum(TR_DATUM);
       tft.setTextSize(1);
       tft.setTextColor(colBtnBg);
-      tft.drawString(mk, 310, ROW_Y0 + 8);
+      tft.drawString(mk, 310, LOC_CURR_Y);
       tft.setTextDatum(TL_DATUM);
     }
   }
@@ -648,25 +671,39 @@ void drawWeather() {
   truncText(loc, locSz, 296, locFit, sizeof(locFit));
   tft.setTextSize(locSz);
   tft.setTextColor(userSettings.placeName[0] ? colBgTxt : colHint);
-  tft.drawString(locFit, ROW_X + 10, ROW_Y0 + 22);
+  tft.drawString(locFit, ROW_X + 10, LOC_VAL_Y);
+  // Buttons: ADD LOCATION (postal code / city lookup) and SAVE CURRENT
+  // (Phase 7: store the current location + station configuration as a
+  // named profile).
   char pc[sizeof(userSettings.postalCode)];
   snprintf(pc, sizeof(pc), "%s",
            userSettings.postalCode[0] ? userSettings.postalCode : "TAP TO ENTER");
-  // Coordinates and timezone are display only (plain text, not buttons):
-  // the location is edited via ADD LOCATION (postal code / city name) and
-  // the zone follows the location, resolved on every weather fetch (no
-  // manual controls).
-  char lat[24], lon[24];
-  snprintf(lat, sizeof(lat), "%.4f", userSettings.lat);
-  snprintf(lon, sizeof(lon), "%.4f", userSettings.lon);
-  drawInfoRow(LOC_INFO_Y0, "LATITUDE", lat);
-  drawInfoRow(LOC_INFO_Y0 + LOC_INFO_PITCH, "LONGITUDE", lon);
-  drawInfoRow(LOC_INFO_Y0 + 2 * LOC_INFO_PITCH, "TIME ZONE",
-              userSettings.timezone.name);
   drawListRow(1, "ADD LOCATION", pc, sGrid == 1, false, LOC_ADD_Y, LOC_BTN_H);
-  char sv[12];
-  snprintf(sv, sizeof(sv), "%d SAVED", profileCount());
-  drawListRow(1, "SAVE LOCATIONS", sv, sGrid == 2, false, LOC_SAVE_Y, LOC_BTN_H);
+  drawListRow(1, "SAVE CURRENT", "CURRENT LOCATION", sGrid == 2, false,
+              LOC_SAVE_Y, LOC_BTN_H);
+  // Phase 7: the three saved-profile rows.
+  for (int i = 0; i < PROFILE_MAX; i++)
+    drawProfileRow(i, PROF_ROW_Y0 + i * (PROF_ROW_H + PROF_GAP));
+  drawResetButton("CLEAR / RESET");
+  // Bottom status line: the pending profile result message (warn
+  // colored; red LED while it stays on the page), else the resolved
+  // timezone name (the zone follows the location, resolved on every
+  // weather fetch — no manual controls).
+  {
+    char line[48], tz[48];
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextSize(1);
+    if (profMsg[0]) {
+      tft.setTextColor(profMsgGood ? colBgTxt : colWarn);
+      truncText(profMsg, 1, 300, line, sizeof(line));
+      tft.drawString(line, 160, LOC_MSG_Y);
+    } else {
+      tft.setTextColor(colHint);
+      snprintf(tz, sizeof(tz), "TIME ZONE: %s", userSettings.timezone.name);
+      truncText(tz, 1, 300, line, sizeof(line));
+      tft.drawString(line, 160, LOC_MSG_Y);
+    }
+  }
   char iana[48];
   const char* id = autoTimezoneIana();
   if (id[0])
@@ -674,98 +711,7 @@ void drawWeather() {
              autoTimezoneUnsupported() ? " (UNSUPPORTED)" : "");
   else
     snprintf(iana, sizeof(iana), "IANA: - (SET ON FIRST WEATHER UPDATE)");
-  drawResetButton("CLEAR / RESET");
   drawFooter(iana);
-}
-
-// Phase 7 — SAVE LOCATIONS page (from the LOCATION page's SAVE LOCATIONS
-// button): SAVE CURRENT stores the current location + station
-// configuration under a name (up to 12 chars); each saved profile row
-// shows the name + saved place (left 75 % — tap to restore) and a red
-// CLEAR button (right 25 %); unused slots show EMPTY (tapping an empty
-// slot acts like SAVE CURRENT — the current location is saved into it).
-// The active profile — the one whose stored location equals the current
-// location — is the row whose left side is on the yellow accent
-// background (the red CLEAR box is unchanged). When all slots are used,
-// SAVE CURRENT does not open the keyboard — the page shows the large
-// (size 2) result line instead.
-void drawSaveLoc() {
-  tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
-  drawHeader("SAVE LOCATIONS", false);
-
-  drawListRow(0, "SAVE CURRENT", "CURRENT LOCATION", sGrid == 0, false,
-              SL_SAVE_Y, SL_BTN_H);
-
-  const int active = profileActive();
-  for (int i = 0; i < PROFILE_MAX; i++) {
-    const int y = SL_ROW_Y0 + i * (SL_BTN_H + SL_GAP);
-    const LocationProfile* p = profileGet(i);
-    if (!p) {
-      // Unused slot: a single dim row — tapping it acts like
-      // SAVE CURRENT (the current location is saved into it).
-      tft.fillRoundRect(ROW_X, y, ROW_W, SL_BTN_H, 6, colRowBg);
-      tft.drawRoundRect(ROW_X, y, ROW_W, SL_BTN_H, 6, colRowBd);
-      tft.setTextDatum(MC_DATUM);
-      tft.setTextSize(1);
-      tft.setTextColor(colDim);
-      tft.drawString("EMPTY", ROW_X + ROW_W / 2, y + SL_BTN_H / 2 + 1);
-      continue;
-    }
-    // NAME + saved place (left 75 %): the active profile is the yellow
-    // accent row; the other rows are white (selection highlight when
-    // focused).
-    const bool isActive = (active == i);
-    tft.fillRoundRect(ROW_X, y, SL_LEFT_W, SL_BTN_H, 6,
-                      isActive ? colBtnBg
-                               : (sGrid == 1 + i ? colRowSel : colRowBg));
-    tft.drawRoundRect(ROW_X, y, SL_LEFT_W, SL_BTN_H, 6,
-                      isActive ? colBtnBd : colRowBd);
-    // Two-line label: the user-defined name + the saved place
-    // ("City, Region, CC", trimmed to the row width; the postal code as
-    // fallback for a profile with no resolved place name).
-    char place[64];
-    truncText(p->placeName[0] ? p->placeName : p->postalCode, 1,
-              SL_LEFT_W - 12, place, sizeof(place));
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextSize(1);
-    tft.setTextColor(isActive ? colBtnTxt : colText);
-    tft.drawString(p->name, ROW_X + SL_LEFT_W / 2, y + SL_BTN_H / 2 - 6);
-    tft.drawString(place, ROW_X + SL_LEFT_W / 2, y + SL_BTN_H / 2 + 6);
-    // CLEAR (right 25 %) — always a red box, on the active row too.
-    tft.fillRoundRect(ROW_X + SL_LEFT_W, y, ROW_W - SL_LEFT_W, SL_BTN_H, 6,
-                      colDanger);
-    tft.drawRoundRect(ROW_X + SL_LEFT_W, y, ROW_W - SL_LEFT_W, SL_BTN_H, 6,
-                      colDangerBd);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextSize(1);
-    tft.setTextColor(C(0xFF, 0xFF, 0xFF));
-    tft.drawString("CLEAR", ROW_X + SL_LEFT_W + (ROW_W - SL_LEFT_W) / 2,
-                   y + SL_BTN_H / 2 + 1);
-  }
-
-  // Result line: size 2, warn-colored on errors; a message that does not
-  // fit at size 2 is split into two centered lines at the space nearest
-  // the middle (the NO FREE SLOTS message).
-  if (profMsg[0]) {
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextSize(2);
-    tft.setTextColor(profMsgGood ? colBgTxt : colWarn);
-    if (txtW(profMsg, 2) <= 300) {
-      tft.drawString(profMsg, 160, 202);
-    } else {
-      const int n = (int)strlen(profMsg);
-      int sp = -1;
-      for (int i = n / 2; i > 0; i--)
-        if (profMsg[i] == ' ') { sp = i; break; }
-      if (sp < 0) sp = n / 2;
-      char l1[48], l2[48];
-      snprintf(l1, sizeof(l1), "%.*s", sp, profMsg);
-      snprintf(l2, sizeof(l2), "%s", profMsg + sp + 1);
-      tft.drawString(l1, 160, 190);
-      tft.drawString(l2, 160, 208);
-    }
-  }
-  drawFooter("RESTORE APPLIES LOCATION + STATIONS");
 }
 
 // Phase 7 — RESTORE LOCATION page (transient, after tapping a saved
@@ -1027,7 +973,6 @@ void draw() {
     case PAGE_POSTAL:     drawPostal();     break;
     case PAGE_STATIONS:   drawStations();   break;
     case PAGE_STN_SCAN:   drawStnScan();    break;
-    case PAGE_SAVELOC:    drawSaveLoc();    break;
     case PAGE_RESTORE:    drawRestore();    break;
     case PAGE_TEMP:       if (tempPreview >= 0) drawTempPreview();
                           else                  drawTempRanges();
@@ -1822,7 +1767,7 @@ void applyLocation(int i) {
   ledActivityEnd();
 }
 
-// Phase 7 — SAVE CURRENT (SAVE LOCATIONS page): QWERTY entry of a profile
+// Phase 7 — SAVE CURRENT (LOCATION page): QWERTY entry of a profile
 // name (up to 12 chars, enforced by the keyboard's buffer limit). The
 // current location + station configuration is stored in the first empty
 // slot and becomes the active profile. The outcome is shown on the page's
@@ -1832,7 +1777,7 @@ void saveCurrentProfile() {
   ledAdvisoryOff();   // a new save attempt replaces the previous result line
   if (profileCount() >= PROFILE_MAX) {
     // All slots in use: do not open the keyboard — there is nowhere to
-    // save. The page shows the large (size 2, two lines) result line.
+    // save. The LOCATION page shows the result on its bottom status line.
     snprintf(profMsg, sizeof(profMsg), "NO FREE SLOTS - CLEAR A SAVED LOCATION");
     draw();
     ledAdvisoryOn();   // keep red while the warning stays on the page
@@ -1889,7 +1834,7 @@ void restoreStatus(const char* m, bool done, bool good) {
   delay(done ? 2000 : 50);
 }
 
-// Phase 7 — row tap on a saved profile (SAVE LOCATIONS page): applies
+// Phase 7 — row tap on a saved profile (LOCATION page): applies
 // the saved location + station configuration (no re-geocoding, no station
 // rediscovery) and refetches the weather; the automatic timezone is
 // re-resolved from the restored coordinates during that fetch. The
@@ -1903,7 +1848,7 @@ static void restoreProfileRun(int i) {   // renamed: wrapped by restoreProfile()
   restoreStatus("LOADING SAVED LOCATION...", false, false);
   if (!profileRestore(i)) {
     restoreStatus("RESTORE FAILED - RETRY", true, false);
-    page = PAGE_SAVELOC; sGrid = 1 + i;
+    page = PAGE_WEATHER; sGrid = 3 + i;
     draw();
     return;
   }
@@ -1978,23 +1923,22 @@ void handleTap(int16_t x, int16_t y) {
     switch (page) {
       case PAGE_MAIN:       backToPicker();      break;
       case PAGE_APPEARANCE:
-      case PAGE_WEATHER:   page = PAGE_MAIN; sGrid = 0; draw(); break;
+      case PAGE_WEATHER:   ledAdvisoryOff();   // dismiss a pending result
+                            profMsg[0] = 0;
+                            page = PAGE_MAIN; sGrid = 0; draw(); break;
       case PAGE_POSTAL:     ledAdvisoryOff();   // dismiss the lookup message
                             page = PAGE_WEATHER; sGrid = 1; draw(); break;
       case PAGE_STATIONS:   page = PAGE_MAIN;  sGrid = 3; draw(); break;
       case PAGE_STN_SCAN:   page = PAGE_STATIONS; sGrid = 2; draw(); break;
       case PAGE_SCAN:       page = PAGE_WIFI;  sGrid = 1; draw(); break;
       case PAGE_WIFI:       page = PAGE_MAIN;  sGrid = 2; draw(); break;
-      case PAGE_SAVELOC:    ledAdvisoryOff();   // dismiss the save result line
-                            page = PAGE_WEATHER; sGrid = 2; draw(); break;
-      case PAGE_RESTORE:    page = PAGE_SAVELOC; sGrid = 0; draw(); break;
+      case PAGE_RESTORE:    page = PAGE_WEATHER; sGrid = 2; draw(); break;
       case PAGE_TEMP:       page = PAGE_MAIN;    sGrid = 4; draw(); break;
       case PAGE_CONFIRM: {   // BACK: nothing has been changed yet.
         int t = resetTarget;
         resetTarget = RT_NONE;
         profClearIdx = -1;
-        page = (t == RT_WIFI) ? PAGE_WIFI :
-               (t == RT_PROFILE) ? PAGE_SAVELOC : PAGE_WEATHER;
+        page = (t == RT_WIFI) ? PAGE_WIFI : PAGE_WEATHER;
         sGrid = 0;
         draw();
         break;
@@ -2061,6 +2005,8 @@ void handleTap(int16_t x, int16_t y) {
             doWifiReset();    // sets page + sGrid, draws itself
             break;
           case RT_PROFILE:    // Phase 7: erase the confirmed profile slot.
+          {
+            const int cidx = profClearIdx;
             ledActivityBegin();
             profileClear(profClearIdx);
             ledActivityEnd();
@@ -2068,8 +2014,9 @@ void handleTap(int16_t x, int16_t y) {
             snprintf(profMsg, sizeof(profMsg), "PROFILE CLEARED");
             profMsgGood = true;
             ledAdvisoryOff();   // the cleared slot replaces any warning
-            page = PAGE_SAVELOC; sGrid = 0;
+            page = PAGE_WEATHER; sGrid = 3 + cidx;
             break;
+          }
         }
         resetTarget = RT_NONE;
         draw();
@@ -2120,17 +2067,36 @@ void handleTap(int16_t x, int16_t y) {
       draw();
       break;
     case PAGE_WEATHER:
-      // The ADD LOCATION and SAVE LOCATIONS buttons act; the location,
-      // coordinate and timezone lines are display-only.
+      // The ADD LOCATION / SAVE CURRENT buttons and the profile rows
+      // act; the location display and the bottom status line are
+      // display-only.
       if (y >= LOC_ADD_Y && y < LOC_ADD_Y + LOC_BTN_H) {
         sGrid = 1;
         editLocation();
       } else if (y >= LOC_SAVE_Y && y < LOC_SAVE_Y + LOC_BTN_H) {
-        profMsg[0] = 0;
-        ledAdvisoryOff();   // the page reopens with a fresh (empty) result line
-        page = PAGE_SAVELOC;
-        sGrid = 0;
-        draw();
+        sGrid = 2;
+        saveCurrentProfile();
+      } else {
+        int row = -1;
+        for (int i = 0; i < PROFILE_MAX; i++) {
+          const int ry = PROF_ROW_Y0 + i * (PROF_ROW_H + PROF_GAP);
+          if (y >= ry && y < ry + PROF_ROW_H) { row = i; break; }
+        }
+        if (row < 0) break;
+        sGrid = 3 + row;
+        if (!profileGet(row)) {
+          // EMPTY slot: saving the current location into it.
+          saveCurrentProfile();
+        } else if (x < ROW_X + PROF_LEFT_W) {
+          // Left 75 %: apply the profile.
+          restoreProfile(row);
+        } else {
+          // CLEAR (right 25 %)
+          resetTarget = RT_PROFILE;
+          profClearIdx = row;
+          page = PAGE_CONFIRM;
+          draw();
+        }
       }
       break;
     case PAGE_POSTAL:
@@ -2194,33 +2160,6 @@ void handleTap(int16_t x, int16_t y) {
       {
         const int idx = stnPage * STN_PER_PAGE + r;
         if (idx < stnCount) stnSelect(idx);   // persist + back to STATIONS page
-      }
-      break;
-    case PAGE_SAVELOC:
-      if (y >= SL_SAVE_Y && y < SL_SAVE_Y + SL_BTN_H) {
-        sGrid = 0;
-        saveCurrentProfile();
-        break;
-      }
-      {
-        int row = -1;
-        for (int i = 0; i < PROFILE_MAX; i++) {
-          const int ry = SL_ROW_Y0 + i * (SL_BTN_H + SL_GAP);
-          if (y >= ry && y < ry + SL_BTN_H) { row = i; break; }
-        }
-        if (row < 0) break;
-        if (!profileGet(row)) {                   // EMPTY slot: saving the
-          sGrid = 1 + row;                        // current location into it
-          saveCurrentProfile();                   // (the first empty slot)
-        } else if (x < ROW_X + SL_LEFT_W) {       // left 75 %: apply the profile
-          sGrid = 1 + row;
-          restoreProfile(row);
-        } else {                                   // CLEAR (right 25 %)
-          resetTarget = RT_PROFILE;
-          profClearIdx = row;
-          page = PAGE_CONFIRM;
-          draw();
-        }
       }
       break;
     case PAGE_TEMP:
