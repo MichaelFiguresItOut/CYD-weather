@@ -486,8 +486,11 @@ void drawTempRow(int b, int y) {
   tft.setTextSize(2);
   tft.setTextColor(colText);
   tft.drawString(kTempName[b], 14, y + 7);
-  char val[8];
-  snprintf(val, sizeof(val), "%d F", v);
+  // The limit is stored in °F (0–110); shown in the active unit, the
+  // same convention as the dashboard temps (tempForDisplay / tempUnitChar).
+  char val[12];
+  snprintf(val, sizeof(val), "%.1f %s", tempForDisplay((float)v),
+           tempUnitChar());
   tft.setTextDatum(TR_DATUM);
   tft.setTextColor(colDim);
   tft.drawString(val, 306, y + 7);
@@ -526,8 +529,10 @@ void drawTempPreview() {
   tft.fillRect(0, 0, 320, 240, colBg);
   const int b = tempPreview;
   char title[48];
-  snprintf(title, sizeof(title), "%s - %d F AND BELOW", kTempName[b],
-           (int)(userSettings.*kTempField[b]));
+  // Band limit in the active unit (stored in °F, like the sliders).
+  snprintf(title, sizeof(title), "%s - %.1f %s AND BELOW", kTempName[b],
+           tempForDisplay((float)(userSettings.*kTempField[b])),
+           tempUnitChar());
   tft.setTextDatum(MC_DATUM);
   tft.setTextSize(txtW(title, 2) <= 304 ? 2 : 1);
   tft.setTextColor(colBgTxt);
