@@ -6,7 +6,8 @@
 //  Onboard RGB LED as the device status indicator (README.md "LED status"):
 //
 //    GREEN – Ready:      idle, Wi-Fi connected, NTP synced, an NWS station
-//                        is set for the location.
+//                        is set for the location (or the location is outside
+//                        NWS coverage, where no station is the healthy state).
 //    BLUE  – Busy:       an activity is in progress (boot/initial load,
 //                        Wi-Fi scan/connect/reconnect, weather fetch +
 //                        processing, location geocoding + NWS update,
@@ -14,9 +15,11 @@
 //                        init/read/decode, screen-tap refresh).
 //    RED   – Attention:  an activity finished and a condition persists —
 //                        Wi-Fi disconnected (or radio off), NTP not synced,
-//                        or no NWS station for the location — or an explicit
-//                        error warning is on screen (ledAdvisoryOn), e.g.
-//                        the "NO FREE SLOTS" line on SAVE LOCATIONS.
+//                        or no NWS station for a location the last discovery
+//                        covered (nwsCovered; outside-coverage non-US sites
+//                        never raise this) — or an explicit error warning is
+//                        on screen (ledAdvisoryOn), e.g. the "NO FREE SLOTS"
+//                        line on SAVE LOCATIONS.
 //
 //  Exactly one color is on at a time; priority is always
 //  BLUE > RED > GREEN (a running activity is never reported as green or
@@ -62,7 +65,8 @@ void ledAdvisoryOff();
 //   BLUE  – at least one activity in progress;
 //   RED   – no activity and an attention condition is true: advisory on,
 //           Wi-Fi not connected (radio off included), NTP not synced, or
-//           no NWS station set for the location;
+//           no NWS station set for a covered location (userSettings.nwsCovered
+//           && empty nwsStationId);
 //   GREEN – no activity and no attention condition.
 // Cheap and idempotent — call it from the main loop and it only writes the
 // pins when the state actually changes.

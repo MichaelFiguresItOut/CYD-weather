@@ -37,7 +37,8 @@ UserSettings userSettings = {
   "",                       // nwsStationName: its NWS display name
   0.0f,                     // nwsStationDistKm: distance at selection time
   "",                       // nwsStationProvider: e.g. "ASOS"
-  { "", "", "" }            // nwsStationBackup: Phase 4 automatic backups
+  { "", "", "" },           // nwsStationBackup: Phase 4 automatic backups
+  true,                     // nwsCovered: "never looked up yet" = covered
 };
 
 // ---- Persistence (NVS namespace "cydwx") ----------------------------------
@@ -65,6 +66,9 @@ UserSettings userSettings = {
 //   "nwsStnProv" str provider of the selected station (e.g. "ASOS")
 //   "nwsStnBk"   str Phase 4 automatic backups, ";"-joined ICAO ids
 //                (e.g. "KLGA;KTEB;KEWR"; "" = none) - firmware-managed
+//   "nwsCov"   u8    1 = last points lookup covered the location (a station
+//                selection is possible), 0 = outside NWS coverage (non-US);
+//                missing key = never looked up -> treated as covered
 Preferences prefs;   // namespace "cydwx" (also used by wifi_conn.cpp)
 static bool nvsOpen = false;   // set by loadSettings(); save*() no-op without it
 static char tzNameBuf[64];     // home for the loaded/stored timezone name (TimezoneRules.name is a pointer)
@@ -251,10 +255,15 @@ static void loadStationPart() {
     if (bkl[0]) strncat(bkl, ";", sizeof(bkl) - strlen(bkl) - 1);
     strncat(bkl, userSettings.nwsStationBackup[k], sizeof(bkl) - strlen(bkl) - 1);
   }
-  Serial.printf("[CFG] NWS station: id=\"%s\" name=\"%s\" dist=%.1f km provider=\"%s\" backups=[%s]\n",
+  // Coverage of the last completed points lookup (see UserSettings.nwsCovered
+  // - the LED's "no NWS station" red condition depends on it). Missing key
+  // (never looked up) defaults to covered, keeping the red nudge for US
+  // installs until the first lookup says otherwise.
+  userSettings.nwsCovered = (prefs.getUChar("nwsCov", 1) != 0);
+  Serial.printf("[CFG] NWS station: id=\"%s\" name=\"%s\" dist=%.1f km provider=\"%s\" backups=[%s] covered=%d\n",
                 userSettings.nwsStationId, userSettings.nwsStationName,
                 (double)userSettings.nwsStationDistKm, userSettings.nwsStationProvider,
-                bkl);
+                bkl, (int)userSettings.nwsCovered);
 }
 
 void loadSettings() {
@@ -368,6 +377,7 @@ void saveNwsStation() {
     strncat(bk, userSettings.nwsStationBackup[k], sizeof(bk) - strlen(bk) - 1);
   }
   if (ok) ok = prefs.putString("nwsStnBk", bk);
+  if (ok) ok = prefs.putUChar("nwsCov", userSettings.nwsCovered ? 1 : 0);
   if (!ok) Serial.println("[CFG] NWS station save failed");
 }
 

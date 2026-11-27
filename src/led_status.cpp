@@ -104,10 +104,15 @@ void ledRecompute() {
   const bool activity = (s_activity > 0);
   // Persistent attention conditions — re-derived on every recompute from
   // the existing app state (no duplicate connectivity tracking):
+  // "No NWS station" is an attention condition only when the last completed
+  // points lookup covered the location (nwsCovered, set by the STATION SCAN
+  // / location-apply discovery and persisted in NVS): outside NWS coverage
+  // (non-US sites) an empty selection is the healthy state and stays green.
   const bool red = s_advisory ||
                    !WiFi.isConnected() ||            // radio off included
                    !ntpIsSynced() ||
-                   userSettings.nwsStationId[0] == '\0';
+                   (userSettings.nwsCovered &&
+                    userSettings.nwsStationId[0] == '\0');
   const LedState st = decide(activity, red);
   if (st != s_state) {
     apply(st);

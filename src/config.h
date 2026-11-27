@@ -95,6 +95,12 @@ struct UserSettings {
   // never user-configurable, rebuilt on every selection. The ordered
   // fallback list is [nwsStationId, nwsStationBackup[0..count-1]].
   char nwsStationBackup[NWS_BACKUP_MAX][8];  // ICAO ids, "" = empty slot
+  // Last completed NWS points lookup: true = the location is inside NWS
+  // coverage (a station selection is possible), false = outside coverage
+  // (non-US site; an empty selection is the healthy state and must not
+  // raise the red LED). Default true = "never looked up yet", which keeps
+  // the red nudge for built-for-site US installs until the first lookup.
+  bool nwsCovered;
 };
 
 // TEMP RANGES: slider range and the values first boot / the RESTORE

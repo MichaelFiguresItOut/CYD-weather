@@ -1217,6 +1217,7 @@ void stnDiscoverRun() {   // renamed: wrapped by stnDiscover() below
   const int r = nwsPointsLookup(userSettings.lat, userSettings.lon, stationsUrl,
                                 sizeof(stationsUrl));
   if (r == -2) {                        // 404: outside NWS coverage
+    userSettings.nwsCovered = false;    // persist via stnClearSelection()
     stnPhase = STN_MSG;
     snprintf(stnMsg, sizeof(stnMsg), "NOT IN NWS COVERAGE");
     draw();
@@ -1230,6 +1231,8 @@ void stnDiscoverRun() {   // renamed: wrapped by stnDiscover() below
     draw();
     return;
   }
+  userSettings.nwsCovered = true;       // the LED red condition follows this
+  saveNwsStation();
   snprintf(stnMsg, sizeof(stnMsg), "FETCHING STATION LIST...");
   draw();
   delay(50);
@@ -1742,10 +1745,14 @@ void autoDiscoverStations() {
   const int r = nwsPointsLookup(userSettings.lat, userSettings.lon,
                                 stationsUrl, sizeof(stationsUrl));
   if (r == -2) {   // 404: outside NWS coverage
+    userSettings.nwsCovered = false;    // healthy for non-US sites: no red LED
+    saveNwsStation();
     postalStatus("NO NWS STATIONS - USING OPEN-METEO", true, false);
     return;
   }
   if (r != 0) { postalStatus("STATION UPDATE FAILED - RETRY", true, false); return; }
+  userSettings.nwsCovered = true;
+  saveNwsStation();
   postalStatus("FETCHING STATION LIST...", false, false);
   // The station list (and with it the cached observation state) may have
   // changed: drop it before parsing, same as stnDiscover().

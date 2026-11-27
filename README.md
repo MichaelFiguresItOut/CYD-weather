@@ -557,7 +557,10 @@ Main page: five section tiles.
   `NWS_OBS_FRESH_MAX_S`, 90 min) print in the warn color; a failed or not
   yet fetched observation shows `OBSERVATION FETCH FAILED` /
   `OBSERVATION NOT CHECKED` instead. Tapping a station row selects it —
-  id, name, distance and provider are persisted to NVS (`cydwx`) — and the
+  id, name, distance, provider and the coverage flag (`nwsCov`: 1 = inside
+  NWS coverage, 0 = outside; the LED's "no NWS station" red condition
+  depends on it, so non-US sites don't stay red) are persisted to NVS
+  (`cydwx`) — and the
   firmware automatically records up to 3 backup stations from the same
   scan's check set (Phase 6.5: the same quality ranking as the auto
   selection, excluding the pick; without NTP that is the plain
@@ -692,8 +695,8 @@ Navigation: body tap = next page → next alert → back to the dashboard on the
 ## LED status (onboard RGB)
 The onboard RGB LED is a device status light, driven by `src/led_status.cpp` (`ledInit()` at the start of `setup()`; `loop()` keeps it current with `ledRecompute()`):
 - **BLUE — busy**: the board is actively working — boot init + initial load, Wi-Fi scan/join (including the 10 s loop reconnect attempts), POSTAL lookup, STATION SCAN + observation checks, profile save/restore/clear, weather fetch, dog-outfit reload. An operation stays blue from start to finish even when it spans several network calls (e.g. the Open-Meteo → Nominatim fallback, a Wi-Fi reconnect mid-fetch): nested sub-steps never flash green/red in between.
-- **RED — attention**: idle, but something needs looking at — Wi-Fi disconnected or radio off, NTP not synced, no NWS station configured, or a persistent failure line on screen ("NO FREE SLOTS - CLEAR A SAVED LOCATION", "LOOKUP FAILED - RETRY", "NO MATCH FOR …", "SAVE FAILED - RETRY", "FAILED" after a join). Red is suppressed while blue is active, so a blue operation that ends in failure settles on red.
-- **GREEN — ready**: idle and healthy — connected, clock synced, NWS station configured.
+- **RED — attention**: idle, but something needs looking at — Wi-Fi disconnected or radio off, NTP not synced, no NWS station configured *for a location the last station discovery covered* (`nwsCovered`; outside-coverage / non-US sites legitimately have no station and stay green), or a persistent failure line on screen ("NO FREE SLOTS - CLEAR A SAVED LOCATION", "LOOKUP FAILED - RETRY", "NO MATCH FOR …", "SAVE FAILED - RETRY", "FAILED" after a join). Red is suppressed while blue is active, so a blue operation that ends in failure settles on red.
+- **GREEN — ready**: idle and healthy — connected, clock synced, NWS station configured (or the location is outside NWS coverage, where no station is the expected state).
 Priority: blue > red > green. The 10 s Wi-Fi reconnect *check* in `loop()` is not an activity: while disconnected the LED stays red between attempts and goes blue only during the actual `wifiEnsureConnected()` call. Neither is the NWS alerts poll (the WEATHER ALERT feature) — it is routine background work and never moves the LED.
 
 ## Build & flash
