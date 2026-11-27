@@ -98,6 +98,13 @@ bool wifiConnectTo(const char* ssid, const char* pass) {
     return true;
   }
   Serial.println("[WIFI] Connection failed.");
+  // Abort the driver's attempt: the 20 s poll above only stopped WAITING -
+  // the station kept searching for the network in the background (state
+  // stayed "connecting" long after the timeout). Left alone, that zombie
+  // made the next Settings scan return 0 results and the next begin() fail
+  // with "sta is connecting, cannot set config". The main loop retries on
+  // its own 10 s schedule, so nothing is lost by aborting.
+  WiFi.disconnect();
   return false;
 }
 
@@ -111,6 +118,36 @@ bool wifiEnsureConnected() {
 // ---------------------------------------------------------------------------
 //  Scan (used by the Settings > Wi-Fi page)
 // ---------------------------------------------------------------------------
+// wifi_auth_mode_t -> short name for the scan trace.
+static const char* authName(uint8_t enc) {
+  switch (enc) {
+    case WIFI_AUTH_OPEN:          return "open";
+    case WIFI_AUTH_WEP:           return "wep";
+    case WIFI_AUTH_WPA_PSK:       return "wpa";
+    case WIFI_AUTH_WPA2_PSK:      return "wpa2";
+    case WIFI_AUTH_WPA_WPA2_PSK:  return "wpa/wpa2";
+    case WIFI_AUTH_WPA3_PSK:      return "wpa3";
+    case WIFI_AUTH_WPA2_WPA3_PSK: return "wpa2/wpa3";
+    default:                      return "other";
+  }
+}
+
+// SSID -> serial-safe copy: printable ASCII as-is, any other byte as \xNN
+// (SSIDs are arbitrary bytes; control chars in the log stream would be
+// indistinguishable from a UART glitch).
+static void ssidToLogBuffer(const char* s, char* buf, int n) {
+  int o = 0;
+  for (int i = 0; s[i] && o < n - 5; i++) {
+    unsigned char ch = (unsigned char)s[i];
+    if (ch >= 0x20 && ch < 0x7F) {
+      buf[o++] = (char)ch;
+    } else {
+      o += snprintf(buf + o, (size_t)(n - o), "\\x%02X", ch);
+    }
+  }
+  buf[o < n ? o : n - 1] = 0;
+}
+
 int wifiScanNetworks(WifiScanItem* out, int maxN, int minRssiDbm) {
   // Scanning while the station is connected — or still tearing the link
   // down — truncates the scan (the RF is busy): the classic "only a
@@ -132,7 +169,10 @@ int wifiScanNetworks(WifiScanItem* out, int maxN, int minRssiDbm) {
   // main loop's 10 s reconnect is paused while Settings is open).
   // Callers must also make sure the radio is on: a join re-enables it via
   // wifiConnectTo(), and the Settings page refuses to scan while it is off.
-  if (WiFi.status() == WL_CONNECTED) {
+  // Any state but DISCONNECTED must be torn down first - including
+  // WL_CONNECTING: a timed-out connect attempt leaves the station still
+  // searching for the network, and a scan against that busy RF returns 0.
+  if (WiFi.status() != WL_DISCONNECTED) {
     WiFi.setAutoReconnect(false);
     WiFi.disconnect();
   }
@@ -140,24 +180,54 @@ int wifiScanNetworks(WifiScanItem* out, int maxN, int minRssiDbm) {
   delay(300);   // let the RF settle after deauth
 
   WiFi.setSleep(false);
+  uint32_t t0 = millis();
+  Serial.println("[WIFI] Scan starting (passive, all channels, 400 ms/ch)...");
   int n = WiFi.scanNetworks(false, true, true, 400, 0);
   //      (sync, show_hidden, passive, 400 ms/channel, all channels)
-  if (n < 0) n = 0;
+  if (n == WIFI_SCAN_RUNNING) {
+    Serial.println("[WIFI] Scan failed: a scan was already running.");
+    n = 0;
+  } else if (n == WIFI_SCAN_FAILED) {
+    Serial.printf("[WIFI] Scan FAILED (timeout after %u ms)\n", (unsigned)(millis() - t0));
+    n = 0;
+  } else {
+    Serial.printf("[WIFI] Scan completed in %u ms: %d networks found\n",
+                  (unsigned)(millis() - t0), n);
+  }
 
-  int c = 0, droppedRssi = 0;
-  for (int i = 0; i < n && c < maxN; i++) {
-    const char* s = WiFi.SSID(i).c_str();
-    if (s == nullptr || *s == 0) continue;          // hidden
-    if (WiFi.RSSI(i) < minRssiDbm) { droppedRssi++; continue; }
+  int c = 0, droppedHidden = 0, droppedRssi = 0, droppedDup = 0, droppedCap = 0;
+  String ssid;    // ours: getNetworkInfo() fills it each iteration, so the
+                 // pointer stays valid for the whole iteration. (The old
+                 // WiFi.SSID(i).c_str() returned a TEMPORARY String whose
+                 // buffer was freed at the end of the statement - the
+                 // strcmp/strncpy below then read freed memory, corrupting
+                 // or dropping valid networks.)
+  uint8_t enc = 0;
+  int32_t rssi = 0;
+  uint8_t* bssid = nullptr;
+  int32_t chan = 0;
+  char logbuf[65];
+  for (int i = 0; i < n; i++) {
+    if (!WiFi.getNetworkInfo(i, ssid, enc, rssi, bssid, chan)) continue;
+    const char* s = ssid.c_str();   // valid until end of this iteration
+    ssidToLogBuffer(s, logbuf, sizeof logbuf);
+    // Trace EVERY raw AP so a missing network can be attributed to the RF
+    // (absent below) or to a filter (reason on the next lines). After the
+    // scan, so the logging never disturbs the scan itself.
+    Serial.printf("[WIFI]   raw[%02d] %-22s rssi=%ld ch=%ld auth=%s\n",
+                  i, logbuf, (long)rssi, (long)chan, authName(enc));
+    if (s[0] == 0) { droppedHidden++; continue; }        // hidden SSID
+    if (rssi < minRssiDbm) { droppedRssi++; continue; }
+    if (c >= maxN) { droppedCap++; continue; }           // display-list cap
     bool dup = false;
     for (int j = 0; j < c; j++) {
       if (strcmp(out[j].ssid, s) == 0) { dup = true; break; }
     }
-    if (dup) continue;
+    if (dup) { droppedDup++; continue; }
     strncpy(out[c].ssid, s, 32);
     out[c].ssid[32] = 0;
-    out[c].rssi = (int8_t)WiFi.RSSI(i);
-    out[c].secure = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+    out[c].rssi = (int8_t)rssi;
+    out[c].secure = (enc != WIFI_AUTH_OPEN);
     c++;
   }
 
@@ -168,11 +238,11 @@ int wifiScanNetworks(WifiScanItem* out, int maxN, int minRssiDbm) {
     while (j > 0 && out[j - 1].rssi < t.rssi) { out[j] = out[j - 1]; j--; }
     out[j] = t;
   }
-  // Diagnostics: raw = driver results, dropped = filtered by the RSSI
-  // floor, stored = copied into the caller's list (capped by maxN). If the
-  // user's network is absent from all three, the passive pass itself missed
-  // it (RF), not the filters.
-  Serial.printf("[WIFI] Scan: %d raw, %d below %d dBm dropped, %d stored\n",
-                n, droppedRssi, minRssiDbm, c);
+  // Diagnostics: raw = driver results, then each filter's discard count,
+  // then stored = copied into the caller's list. If the user's network is
+  // absent from the raw trace above, the passive pass itself missed it
+  // (RF/antenna/channel), not the filters.
+  Serial.printf("[WIFI] Scan: %d raw, %d hidden, %d below %d dBm, %d dup, %d capped at %d, %d stored\n",
+                n, droppedHidden, droppedRssi, minRssiDbm, droppedDup, droppedCap, maxN, c);
   return c;
 }

@@ -67,26 +67,39 @@ void setup() {
   weatherInitSdAndDog();
   renderScreen();
 
-  // WiFi (today: build-time credentials from local_config.h via
-  // wifiCredentials(); the future touchscreen setup saves credentials to NVS
-  // and opens a setup screen when none exist — that hook goes here).
+  // WiFi (build-time credentials from local_config.h via wifiCredentials();
+  // user-saved NVS credentials take priority). A fresh install with no saved
+  // credentials and an unreachable build-time network is handed the WI-FI
+  // settings page directly (onboarding, below).
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
-  wifiEnsureConnected();
+  bool wifiUp = wifiEnsureConnected();
 
   // NTP
   configureTime();
 
-  // Wait briefly for the clock: without it, fetchWeather()'s rain scan is
-  // skipped and boot would show "No rain expected" even when rain is forecast.
-  uint32_t t0 = millis();
-  while (!ntpIsSynced() && millis() - t0 < NTP_BOOT_WAIT_MS) delay(100);
+  if (!wifiUp && !wifiHasSavedCredentials()) {
+    // Onboarding: no user-saved NVS credentials and the build-time network
+    // is unreachable (typical fresh clone built from the unmodified
+    // local_config.h.example) - open the WI-FI page instead of leaving the
+    // user on a dashboard they could never reach: the loop's ~20 s blocking
+    // reconnect attempts starve touch (see the reconnect block in loop()),
+    // so tapping into Settings manually is a matter of luck.
+    Serial.println("[SETUP] No saved Wi-Fi credentials, build-time network "
+                   "unreachable - opening WI-FI settings.");
+    settingsEnterWifi();
+  } else {
+    // Wait briefly for the clock: without it, fetchWeather()'s rain scan is
+    // skipped and boot would show "No rain expected" even when rain is forecast.
+    uint32_t t0 = millis();
+    while (!ntpIsSynced() && millis() - t0 < NTP_BOOT_WAIT_MS) delay(100);
 
-  // Initial weather fetch (best-effort)
-  if (WiFi.status() == WL_CONNECTED) {
-    bool got = fetchWeather();
-    if (got) refreshDogImage();   // swap error.png for the real outfit
-    renderScreen();
+    // Initial weather fetch (best-effort)
+    if (WiFi.status() == WL_CONNECTED) {
+      bool got = fetchWeather();
+      if (got) refreshDogImage();   // swap error.png for the real outfit
+      renderScreen();
+    }
   }
   ledActivityEnd();   // boot done: settle to green (or red — see led_status.h)
 
@@ -113,12 +126,14 @@ void loop() {
   // connectivity themselves, and the blocking ~20 s connect attempt would
   // starve handleTouch() (touches are polled only in this loop — a tap
   // made during the block is lost, and the board feels frozen).
+  // Same for the THEME picker: it is a touch modal (and the SETTINGS entry
+  // lives in it), so its taps would be lost the same way.
   // wifiEnabled() keeps the loop from fighting the user's "WIFI ON/OFF: OFF".
   // The 10 s check itself never turns the LED blue — while disconnected the
   // LED stays red between attempts and goes blue only for the actual
   // reconnect attempt below.
-  if (wifiEnabled() && !settingsActive() && WiFi.status() != WL_CONNECTED &&
-      nowMs - lastWifiCheck >= WIFI_RETRY_MS) {
+  if (wifiEnabled() && !settingsActive() && !themeSelectScreen &&
+      WiFi.status() != WL_CONNECTED && nowMs - lastWifiCheck >= WIFI_RETRY_MS) {
     lastWifiCheck = nowMs;
     ledActivityBegin();   // the reconnect attempt
     wifiEnsureConnected();

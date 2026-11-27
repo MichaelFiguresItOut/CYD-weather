@@ -2058,6 +2058,12 @@ void settingsEnterFromPicker() {
   draw();
 }
 
+void settingsEnterWifi() {
+  settingsEnterFromPicker();
+  page = PAGE_WIFI;
+  draw();
+}
+
 bool settingsActive() { return sActive; }
 
 void settingsTouch(int16_t x, int16_t y) { handleTap(x, y); }

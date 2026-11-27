@@ -7,7 +7,9 @@ Standalone ESP32 weather/clock dashboard.
 
 Fresh-clone setup: copy `src/local_config.h.example` to `src/local_config.h` and fill in
 your WiFi SSID/password and site lat/lon (never commit the real file); copy the 17
-outfit PNGs from `dogs/` to the SD card root (see Dog outfit images).
+outfit PNGs from `dogs/` to the SD card root (see Dog outfit images). The placeholders
+may be left as-is: boot then opens the WI-FI settings page directly (fresh-install
+onboarding, see the WiFi section) and the location is set on the LOCATION page.
 
 Companion reference: `docs/CYD-HARDWARE.md` holds the CYD hardware / display / font / SD
 material split out of this file.
@@ -666,7 +668,11 @@ Navigation: body tap = next page → next alert → back to the dashboard on the
 
 ## WiFi
 - Build-time defaults + site location live in `src/local_config.h` (gitignored — copy `src/local_config.h.example` to `src/local_config.h` and fill in your WiFi SSID/password and your site's lat/lon; never commit real values). Runtime credentials are read through one seam, `wifiCredentials()` (`wifi_conn.cpp`), which prefers **user-saved NVS credentials** (`cydwx/ssid` + `cydwx/pass`, written by the Settings > WI-FI page on a successful join — `wifiSaveCredentials()`) and falls back to the build-time values. NVS is plaintext (no encryption; acceptable for this device). Auto-reconnect in `loop()` (`WIFI_RETRY_MS` 10 s check).
+- **Fresh-install onboarding (boot):** a connect attempt at boot blocks ~20 s and the 10 s reconnect check re-fires immediately after, so a permanently disconnected board is mid-attempt almost all the time (LED blue) and `handleTouch()` is polled only once per ~20 s — taps made during a block are lost. A manual tap into Settings is therefore a matter of luck, so `setup()` opens the Settings WI-FI page directly when no user-saved NVS credentials exist AND the build-time network is unreachable (`[SETUP] No saved Wi-Fi credentials, build-time network unreachable - opening WI-FI settings.`). Working installs never see it: a successful connect (saved or build-time) takes the normal boot path. The loop's reconnect check is paused while the Settings modal *or the THEME picker* is up (the picker is a touch modal too — the SETTINGS entry lives in it).
 - **Scanning** (Settings > WI-FI): reliability requirements and the load-bearing scan parameters are documented in `docs/CYD-HARDWARE.md` ("WiFi radio: scanning"). The short version: passive 400 ms/channel scan (~6 s), only when the radio is fully idle, modem sleep off.
+- **Scan returns 0 after a failed connect (fixed):** a timed-out connect attempt used to leave the station *still searching* for the network — the 20 s poll only stopped waiting, the driver state stayed `WL_CONNECTING`. That zombie made the next Settings scan return 0 networks (busy RF) and the next `WiFi.begin()` fail with "sta is connecting, cannot set config". Two fixes in `wifi_conn.cpp`: `wifiConnectTo()` now calls `WiFi.disconnect()` on timeout (the loop's 10 s retry schedule reconnects on its own, so nothing is lost), and `wifiScanNetworks()` tears down any state but `WL_DISCONNECTED` before scanning (it previously checked only `WL_CONNECTED`), then gives the RF 300 ms to settle.
+- **Scan list reading (fixed):** the old code read `WiFi.SSID(i).c_str()` — a *temporary* String whose buffer was freed at the end of the statement, so the follow-up `strcmp`/`strncpy` read freed memory and could corrupt or silently drop network names. Each AP is now read with `WiFi.getNetworkInfo()` into a caller-owned String that stays valid for the whole iteration.
+- **Scan diagnostics (serial):** the scan logs a per-AP raw trace *after* it completes (SSID with non-printable bytes escaped as `\xNN`, RSSI, channel, auth type), then per-filter discard counts (hidden / below floor / duplicate / display cap) and the duration. A missing network can therefore be attributed to the RF (absent from the raw trace) or to a filter (named by its count); `WIFI_SCAN_RUNNING` / `WIFI_SCAN_FAILED` are reported explicitly instead of clamped to 0.
 - HTTPS via `WiFiClientSecure` + `setInsecure()` (no CA cert). All three clients (main Open-Meteo,
   NBM cross-check, METAR) set `setConnectionTimeout(5000)` (TCP connect + socket read /
   SO_RCVTIMEO) and `setHandshakeTimeout(10)` — the core's default TLS handshake timeout is 120 s,

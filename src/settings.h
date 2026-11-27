@@ -31,6 +31,10 @@
 // Enter Settings from the THEME picker.
 void settingsEnterFromPicker();
 
+// Enter Settings directly on the WI-FI page (fresh-install onboarding at
+// boot: no saved credentials and the build-time network unreachable).
+void settingsEnterWifi();
+
 // True while the Settings screen (incl. keyboards) is on screen.
 bool settingsActive();
 
