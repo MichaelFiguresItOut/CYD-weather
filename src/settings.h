@@ -7,14 +7,18 @@
 //
 //  Entry: the SETTINGS button (top-right corner) on the THEME picker's top
 //  bar; the picker's < BACK corner returns to the dashboard. The main page
-//  shows four tiles:
+//  shows five tiles:
 //
-//    APPEARANCE   - display theme (4 choices; day/night is automatic)
-//    LOCATION     - manual latitude/longitude (numeric keypad)
-//    TIME ZONE    - timezone list, daylight saving on/off
+//    APPEARANCE   - display theme (4 choices; day/night is automatic),
+//                   temp unit, clock format, date format
+//    LOCATION     - add location (postal code or city), info rows, saved
+//                   location profiles
 //    WI-FI        - network scan + join (QWERTY keyboard for credentials),
 //                   manual SSID entry, radio on/off, restore the build-time
 //                   network (erases user-saved credentials)
+//    STATIONS     - local NWS observation-station discovery + fallback list
+//    TEMP RANGES  - the six dog-outfit temperature-band limits (sliders,
+//                   band-name tap = full-screen outfit preview)
 //
 //  Navigation: every screen has < BACK; deeper screens (theme list, timezone
 //  pages, scan results) go back to their section page; the sections go back
@@ -40,3 +44,11 @@ bool settingsActive();
 
 // One completed touch at (x, y); called from touch.cpp only when active.
 void settingsTouch(int16_t x, int16_t y);
+
+// TEMP RANGES slider drag: touch.cpp calls settingsDragMove() for every
+// new finger position while settingsDragActive() is true (a slider is
+// being dragged) and settingsDragEnd() when the finger lifts. No other
+// settings page drags, so the routing is inert elsewhere.
+bool settingsDragActive();
+void settingsDragMove(int16_t x, int16_t y);
+void settingsDragEnd();

@@ -149,8 +149,13 @@ void handleTouch() {
       if (!settingsDown) {
         settingsDown = true;
         settingsTouch(pts[0].x, pts[0].y);
+      } else if (settingsDragActive()) {
+        // TEMP RANGES slider: continuous finger position while a slider is
+        // being dragged (inert on every other settings page).
+        settingsDragMove(pts[0].x, pts[0].y);
       }
     } else {
+      if (settingsDragActive()) settingsDragEnd();   // finger lift: save
       settingsDown = false;
     }
     return;

@@ -58,6 +58,7 @@
 #include "nws_station.h"
 #include "time_util.h"   // ntpIsSynced()
 #include "weather.h"
+#include "dog_image.h"   // TEMP RANGES outfit preview (loadDogImage + row composite)
 #include "profile.h"
 #include "led_status.h"
 
@@ -65,7 +66,8 @@ namespace {
 
 enum Page { PAGE_MAIN, PAGE_APPEARANCE, PAGE_WEATHER, PAGE_WIFI,
             PAGE_SCAN, PAGE_POSTAL, PAGE_STATIONS,
-            PAGE_STN_SCAN, PAGE_CONFIRM, PAGE_SAVELOC, PAGE_RESTORE };
+            PAGE_STN_SCAN, PAGE_CONFIRM, PAGE_SAVELOC, PAGE_RESTORE,
+            PAGE_TEMP };
 
 // --- Geometry (320x240) ------------------------------------------------
 constexpr int HDR_H      = 26;    // blue header bar
@@ -99,6 +101,19 @@ constexpr int SL_LEFT_W   = 234;  // RESTORE area (75 % of the 312 px row)
 constexpr int WIFI_ROW_Y0  = 66;
 constexpr int WIFI_ROW_H   = 32;
 constexpr int WIFI_ROW_GAP = 2;
+// TEMP RANGES page (5th main row): three band sliders per page (six
+// bands) + a RESTORE DEFAULTS button + the footer. A slider's value is
+// the band's max °F (feels <= value); the bands stay ascending with at
+// least 1° apart and everything above MILD WARM's limit is HOT.
+constexpr int TMP_ROW_H     = 50;    // row: name + limit on top, slider below
+constexpr int TMP_ROW_GAP   = 4;
+constexpr int TMP_ROW_Y0    = 30;
+constexpr int TMP_NAME_H    = 21;    // top strip of a row: name tap zone (preview)
+constexpr int TMP_TRACK_Y   = 24;    // track top, relative to the row top
+constexpr int TMP_TRACK_H   = 10;
+constexpr int TMP_TRACK_L   = 14, TMP_TRACK_R = 306;   // track extents
+constexpr int TMP_KNOB_L    = 22, TMP_KNOB_R = 298;    // knob-centre range
+constexpr int TMP_RESTORE_Y = 192, TMP_RESTORE_H = 28; // RESTORE DEFAULTS button
 
 constexpr int SCAN_PER_PAGE = 4;    // networks per SCAN page (row 5 = RESCAN)
 constexpr int STN_PER_PAGE  = 4;    // stations per STATIONS page (row 5 = REFRESH)
@@ -139,6 +154,11 @@ int  page = PAGE_MAIN;
 int  sGrid = 0;               // highlighted row (per page)
 bool sActive = false;
 int  scanPage = 0;            // SCAN list page
+// TEMP RANGES page state
+int  tempPage    = 0;         // 0: EXTREME COLD..COLD, 1: COOL..MILD WARM
+int  tempDrag    = -1;        // band index (0..5) being dragged, -1 = none
+int  tempPreview = -1;        // band index whose outfit is previewed, -1 = none
+bool tempPreviewOk = false;   // preview image loaded (false = show message)
 char savedSsid[WIFI_SSID_MAX + 1] = "";
 int  netCount = 0;
 WifiScanItem nets[SCAN_LIST_MAX];
@@ -418,18 +438,162 @@ void drawResetButton(const char* label) {
   tft.drawString(label, ROW_X + ROW_W / 2, y + RESET_BTN_H / 2);
 }
 
+void draw();   // the page dispatcher (defined below; tempDragTo redraws)
+
+// --- TEMP RANGES (PAGE_TEMP) ---------------------------------------------
+// The dog-outfit temperature bands: one slider per band, its value the
+// band's max °F (feels <= value). Tapping the band name opens the full
+// screen outfit preview (drawTempPreview); dragging the track moves the
+// limit (clamped against the neighbours, see tempBandRange) and the value
+// is saved on release (settingsDragEnd -> saveTempRanges). HOT has no
+// slider: it is everything above MILD WARM's limit.
+static const char* const kTempName[6] = {
+  "EXTREME COLD", "VERY COLD", "COLD", "COOL", "MILD COOL", "MILD WARM" };
+static const char* const kTempFile[6] = {
+  "extreme_cold.png", "very_cold.png", "cold.png", "cool.png",
+  "mild_cool.png", "mild_warm.png" };
+static uint8_t UserSettings::* const kTempField[6] = {
+  &UserSettings::tempExtremeColdMaxF, &UserSettings::tempVeryColdMaxF,
+  &UserSettings::tempColdMaxF,        &UserSettings::tempCoolMaxF,
+  &UserSettings::tempMildCoolMaxF,    &UserSettings::tempMildWarmMaxF };
+
+int tempRowY(int i) { return TMP_ROW_Y0 + i * (TMP_ROW_H + TMP_ROW_GAP); }
+
+// Knob-centre pixel for a limit value and its inverse: the knob sweeps
+// TMP_KNOB_L..TMP_KNOB_R over TEMP_MIN_F..TEMP_MAX_F.
+int tempKnobX(int v) {
+  return TMP_KNOB_L + (TMP_KNOB_R - TMP_KNOB_L) * (v - TEMP_MIN_F) /
+         (TEMP_MAX_F - TEMP_MIN_F);
+}
+int tempValueAtX(int x) {
+  int v = (x - TMP_KNOB_L) * (TEMP_MAX_F - TEMP_MIN_F) / (TMP_KNOB_R - TMP_KNOB_L)
+          + TEMP_MIN_F;
+  if (v < TEMP_MIN_F) v = TEMP_MIN_F;
+  if (v > TEMP_MAX_F) v = TEMP_MAX_F;
+  return v;
+}
+
+// Drag range of band b: above the previous band's limit + 1 and below the
+// next band's limit - 1, so the bands stay ascending with at least 1°
+// apart (the ordering constraint from the spec).
+void tempBandRange(int b, int& lo, int& hi) {
+  lo = (b > 0) ? (int)(userSettings.*kTempField[b - 1]) + 1 : TEMP_MIN_F;
+  hi = (b < 5) ? (int)(userSettings.*kTempField[b + 1]) - 1 : TEMP_MAX_F;
+}
+
+// Set the dragged band's limit to the x position, clamped to its drag
+// range. Redraws only when the value actually changes.
+void tempDragTo(int x) {
+  const int b = tempDrag;
+  if (b < 0) return;
+  int v = tempValueAtX(x);
+  int lo, hi;
+  tempBandRange(b, lo, hi);
+  if (v < lo) v = lo;
+  if (v > hi) v = hi;
+  if ((int)(userSettings.*kTempField[b]) != v) {
+    userSettings.*kTempField[b] = (uint8_t)v;
+    draw();
+  }
+}
+
+void drawTempRow(int b, int y) {
+  tft.fillRoundRect(ROW_X, y, ROW_W, TMP_ROW_H, 6, colRowBg);
+  tft.drawRoundRect(ROW_X, y, ROW_W, TMP_ROW_H, 6, colRowBd);
+  const uint8_t& v = userSettings.*kTempField[b];
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextSize(2);
+  tft.setTextColor(colText);
+  tft.drawString(kTempName[b], 14, y + 7);
+  char val[8];
+  snprintf(val, sizeof(val), "%d F", v);
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextColor(colDim);
+  tft.drawString(val, 306, y + 7);
+  // Slider: light groove, blue fill up to the knob, white knob.
+  const int ty = y + TMP_TRACK_Y;
+  const int gx = TMP_TRACK_L + 2, gw = TMP_TRACK_R - TMP_TRACK_L - 4;
+  tft.fillRoundRect(gx, ty + 2, gw, TMP_TRACK_H - 4, 3, colRowSel);
+  const int kx = tempKnobX(v);
+  if (kx > TMP_KNOB_L) tft.fillRect(gx, ty + 2, kx - gx, TMP_TRACK_H - 4, colHeader);
+  tft.fillRoundRect(kx - 6, ty - 3, 12, TMP_TRACK_H + 6, 3, colRowBg);
+  tft.drawRoundRect(kx - 6, ty - 3, 12, TMP_TRACK_H + 6, 3, colHeader);
+}
+
+void drawTempRanges() {
+  tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
+  drawHeader("TEMP RANGES", tempPage < 1, nullptr, tempPage > 0);
+  for (int i = 0; i < 3; i++)
+    drawTempRow(tempPage * 3 + i, tempRowY(i));
+  tft.fillRoundRect(ROW_X, TMP_RESTORE_Y, ROW_W, TMP_RESTORE_H, 6, colBtnBg);
+  tft.drawRoundRect(ROW_X, TMP_RESTORE_Y, ROW_W, TMP_RESTORE_H, 6, colBtnBd);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextSize(1);
+  tft.setTextColor(colBtnTxt);
+  tft.drawString("RESTORE DEFAULTS", ROW_X + ROW_W / 2, TMP_RESTORE_Y + TMP_RESTORE_H / 2);
+  drawFooter("DRAG - TAP NAME FOR DOG");
+}
+
+// Full screen preview of the tapped band's outfit (drawn when
+// tempPreview >= 0): the band's non-_sun outfit scaled into the box below
+// the title on a white card. The dog buffers hold at most the 96x128
+// corner-zone downscale (loadDogImage), so this is a nearest-neighbour
+// upscale of that — the same row composite drawDogBox() uses, with a
+// solid white background. Any tap closes the preview (handleTap), which
+// reloads the dashboard outfit.
+void drawTempPreview() {
+  tft.fillRect(0, 0, 320, 240, colBg);
+  const int b = tempPreview;
+  char title[48];
+  snprintf(title, sizeof(title), "%s - %d F AND BELOW", kTempName[b],
+           (int)(userSettings.*kTempField[b]));
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextSize(txtW(title, 2) <= 304 ? 2 : 1);
+  tft.setTextColor(colBgTxt);
+  tft.drawString(title, 160, 22);
+  if (!tempPreviewOk) {
+    tft.setTextSize(2);
+    tft.setTextColor(colWarn);
+    tft.drawString("IMAGE UNAVAILABLE", 160, 120);
+    drawFooter("TAP ANYWHERE TO GO BACK");
+    return;
+  }
+  const int w = dogWidth(), h = dogHeight();
+  const int by = 44, bw = 280, bh = 168;            // image box
+  int dw = w, dh = h;
+  const int sx = (bw * 1000) / w, sy = (bh * 1000) / h;
+  const int s = (sx < sy) ? sx : sy;                // fit, keep aspect
+  if (s != 1000) { dw = (w * s) / 1000; dh = (h * s) / 1000; }
+  const int px = (320 - dw) / 2, py = by + (bh - dh) / 2;
+  tft.fillRect(px, py, dw, dh, C(0xFF, 0xFF, 0xFF));   // white card
+  static uint16_t row[128];    // >= kMaxW (96) full-res pixels
+  static uint16_t hrow[128];
+  for (int i = 0; i < dh; i++) {
+    const int imgRow = (i * h) / dh;                // nearest-neighbour row
+    int x0, x1;
+    if (!dogRowSpan(imgRow, x0, x1)) continue;      // transparent: card stays
+    compositeRow(imgRow, 255, 255, 255, row);
+    const int sx0 = (x0 * dw) / w, sx1 = (x1 * dw) / w;
+    for (int j = sx0; j <= sx1 && j < dw; j++)
+      hrow[j - sx0] = row[(j * w) / dw];
+    gT->pushImage(px + sx0, py + i, sx1 - sx0 + 1, 1, hrow);
+  }
+  drawFooter("TAP ANYWHERE TO GO BACK");
+}
+
 // --- Pages ---------------------------------------------------------------
 
 void drawMain() {
   tft.fillRect(0, HDR_H, 320, 240 - HDR_H, colBg);
   drawHeader("SETTINGS", false);
-  const char* items[4][2] = {
+  const char* items[5][2] = {
     { "APPEARANCE",  "theme - units - clock - date" },
     { "LOCATION",    "add location - zone - lat/lon" },
     { "WI-FI",       "networks - join - add" },
     { "STATIONS",    "data source - local NWS station" },
+    { "TEMP RANGES", "dog outfit temperatures" },
   };
-  for (int i = 0; i < 4; i++)
+  for (int i = 0; i < 5; i++)
     drawRow(i, items[i][0], items[i][1], i == sGrid);
   drawFooter("< BACK RETURNS TO THEME PICKER");
 }
@@ -865,6 +1029,9 @@ void draw() {
     case PAGE_STN_SCAN:   drawStnScan();    break;
     case PAGE_SAVELOC:    drawSaveLoc();    break;
     case PAGE_RESTORE:    drawRestore();    break;
+    case PAGE_TEMP:       if (tempPreview >= 0) drawTempPreview();
+                          else                  drawTempRanges();
+                          break;
   }
 }
 
@@ -1257,6 +1424,10 @@ void drawStnScan() {
 // dashboard and repaints it.
 void backToPicker() {
   sActive = false;
+  refreshDogImage();   // the dog buffer may be stale: a TEMP RANGES change
+                       // (or the outfit preview) can make it no longer match
+                       // the current weather + band limits. A no-op (strcmp)
+                       // when the selection hasn't changed.
   themeSelectScreen = true;
   previewTheme = userSettings.theme;   // preview follows the saved theme
   pickerEnter();   // the press that tapped "< BACK" is still down; let the
@@ -1786,6 +1957,15 @@ int headerBtnAt(int16_t x, int16_t y) {
 }
 
 void handleTap(int16_t x, int16_t y) {
+  // TEMP RANGES preview: any tap closes it and reloads the dashboard
+  // outfit (the preview replaced the dog buffer). A drag can never be
+  // active here — the preview opens from a completed tap.
+  if (page == PAGE_TEMP && tempPreview >= 0) {
+    tempPreview = -1;
+    refreshDogImage();
+    draw();
+    return;
+  }
   int hb = headerBtnAt(x, y);
   if (hb == 1) {
     switch (page) {
@@ -1801,6 +1981,7 @@ void handleTap(int16_t x, int16_t y) {
       case PAGE_SAVELOC:    ledAdvisoryOff();   // dismiss the save result line
                             page = PAGE_WEATHER; sGrid = 2; draw(); break;
       case PAGE_RESTORE:    page = PAGE_SAVELOC; sGrid = 0; draw(); break;
+      case PAGE_TEMP:       page = PAGE_MAIN;    sGrid = 4; draw(); break;
       case PAGE_CONFIRM: {   // BACK: nothing has been changed yet.
         int t = resetTarget;
         resetTarget = RT_NONE;
@@ -1827,6 +2008,9 @@ void handleTap(int16_t x, int16_t y) {
                stnPage < stnPageCount() - 1) {
       stnPage++;
       stnCheckPage();      // checks the new page's observations, draws
+    } else if (page == PAGE_TEMP && tempPage < 1) {
+      tempPage++;
+      draw();
     }
     return;
   }
@@ -1843,6 +2027,9 @@ void handleTap(int16_t x, int16_t y) {
                stnPage > 0) {
       stnPage--;
       stnCheckPage();
+    } else if (page == PAGE_TEMP && tempPage > 0) {
+      tempPage--;
+      draw();
     }
     return;
   }
@@ -1891,7 +2078,7 @@ void handleTap(int16_t x, int16_t y) {
   int r = rowAt(y);
   switch (page) {
     case PAGE_MAIN:
-      if (r < 0 || r > 3) return;
+      if (r < 0 || r > 4) return;
       sGrid = r;
       switch (r) {
         case 0: page = PAGE_APPEARANCE; sGrid = 0; draw(); break;
@@ -1903,6 +2090,7 @@ void handleTap(int16_t x, int16_t y) {
         case 3: page = PAGE_STATIONS;   sGrid = 2;
               draw();                   // the lookup starts from the SCAN button
               break;
+        case 4: page = PAGE_TEMP;       sGrid = 0; draw(); break;
       }
       break;
     case PAGE_APPEARANCE:
@@ -2028,6 +2216,40 @@ void handleTap(int16_t x, int16_t y) {
         }
       }
       break;
+    case PAGE_TEMP:
+      // RESTORE DEFAULTS button: back to the defaults + save.
+      if (y >= TMP_RESTORE_Y && y < TMP_RESTORE_Y + TMP_RESTORE_H &&
+          x >= ROW_X && x < ROW_X + ROW_W) {
+        userSettings.tempExtremeColdMaxF = TEMP_DEF_EXTREME_COLD;
+        userSettings.tempVeryColdMaxF    = TEMP_DEF_VERY_COLD;
+        userSettings.tempColdMaxF        = TEMP_DEF_COLD;
+        userSettings.tempCoolMaxF        = TEMP_DEF_COOL;
+        userSettings.tempMildCoolMaxF    = TEMP_DEF_MILD_COOL;
+        userSettings.tempMildWarmMaxF    = TEMP_DEF_MILD_WARM;
+        saveTempRanges();
+        draw();
+        return;
+      }
+      for (int i = 0; i < 3; i++) {
+        const int y0 = tempRowY(i);
+        if (y < y0 || y >= y0 + TMP_ROW_H) continue;
+        const int b = tempPage * 3 + i;
+        if (y - y0 < TMP_NAME_H && x >= 14 &&
+            x < 14 + txtW(kTempName[b], 2) + 8) {
+          // Tap the band name: full screen preview of its outfit.
+          tempPreview = b;
+          tempPreviewOk = loadDogImage(kTempFile[b]);
+          draw();
+        } else if (y - y0 >= TMP_TRACK_Y - 3 && x >= TMP_TRACK_L &&
+                   x <= TMP_TRACK_R) {
+          // Tap the track / knob: the limit jumps to the finger and the
+          // drag begins (the value is saved on release).
+          tempDrag = b;
+          tempDragTo(x);
+        }
+        return;   // at most one row contains the tap
+      }
+      break;
   }
 }
 
@@ -2042,6 +2264,9 @@ void settingsEnterFromPicker() {
   scanPage = 0;
   netCount = 0;
   scanning = false;
+  tempPage = 0;
+  tempDrag = -1;
+  tempPreview = -1;
   geoCount = 0;
   geoPage = 0;
   stnReset();
@@ -2067,3 +2292,18 @@ void settingsEnterWifi() {
 bool settingsActive() { return sActive; }
 
 void settingsTouch(int16_t x, int16_t y) { handleTap(x, y); }
+
+// TEMP RANGES slider drag (touch.cpp routes finger moves + lift here
+// while settingsDragActive()).
+bool settingsDragActive() { return tempDrag >= 0; }
+
+void settingsDragMove(int16_t x, int16_t y) {
+  if (tempDrag < 0 || page != PAGE_TEMP) return;
+  tempDragTo(x);
+}
+
+void settingsDragEnd() {
+  if (tempDrag < 0) return;
+  tempDrag = -1;
+  saveTempRanges();   // save on release, not while dragging
+}

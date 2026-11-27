@@ -504,13 +504,18 @@ static const char* selectDogImage() {
 
   float f = wx.feelsLike;   // °F
   const char* band;
-  if (f < 30.0f)      band = "extreme_cold";   // below 30 F
-  else if (f < 46.0f) band = "very_cold";      // 31-45 F
-  else if (f < 56.0f) band = "cold";           // 46-55 F
-  else if (f < 66.0f) band = "cool";           // 56-65 F
-  else if (f < 71.0f) band = "mild_cool";      // 66-70 F
-  else if (f < 76.0f) band = "mild_warm";      // 71-75 F
-  else                band = "hot";            // 76 F and above
+  // User-configurable band limits (Settings -> TEMP RANGES; see the
+  // UserSettings fields in config.h): a band covers "previous limit + 1 ..
+  // this limit" (feels <= limit), everything above MILD WARM's limit is
+  // HOT. The defaults (30/45/55/65/70/75) keep the original hardwired
+  // chart (README, Dog outfit images).
+  if (f <= userSettings.tempExtremeColdMaxF)      band = "extreme_cold";
+  else if (f <= userSettings.tempVeryColdMaxF)    band = "very_cold";
+  else if (f <= userSettings.tempColdMaxF)        band = "cold";
+  else if (f <= userSettings.tempCoolMaxF)        band = "cool";
+  else if (f <= userSettings.tempMildCoolMaxF)    band = "mild_cool";
+  else if (f <= userSettings.tempMildWarmMaxF)    band = "mild_warm";
+  else                                            band = "hot";
 
   static char name[24];
   snprintf(name, sizeof(name), "%s%s.png", band, wx.sunny ? "_sun" : "");

@@ -70,6 +70,17 @@ struct UserSettings {
   bool useCelsius;                // temperature display: false = Fahrenheit
   bool use24Hour;                 // clock: false = US 12-hour ("2:35 PM")
   int  dateFormat;                // 0: "Thursday 12 November 2026"  1: "Thursday November 12, 2026"
+  // TEMP RANGES (Settings -> TEMP RANGES): the max °F of each dog-outfit
+  // temperature band. The outfit follows the feels-like temperature; a
+  // band covers "previous limit + 1 .. this limit" (feels <= limit). The
+  // six limits stay ascending with at least 1° apart (slider constraint),
+  // and everything above tempMildWarmMaxF is HOT.
+  uint8_t tempExtremeColdMaxF;    // EXTREME COLD (default 30 F)
+  uint8_t tempVeryColdMaxF;       // VERY COLD    (default 45 F)
+  uint8_t tempColdMaxF;           // COLD         (default 55 F)
+  uint8_t tempCoolMaxF;           // COOL         (default 65 F)
+  uint8_t tempMildCoolMaxF;       // MILD COOL    (default 70 F)
+  uint8_t tempMildWarmMaxF;       // MILD WARM    (default 75 F; above = HOT)
   // Selected NWS observation station (chosen on the STATIONS settings page).
   // Phase 5: fetchWeather() reads nwsStationId + nwsStationBackup[] as the
   // dashboard temperature/feels-like source (preferred -> backups -> Open-Meteo).
@@ -85,6 +96,18 @@ struct UserSettings {
   // fallback list is [nwsStationId, nwsStationBackup[0..count-1]].
   char nwsStationBackup[NWS_BACKUP_MAX][8];  // ICAO ids, "" = empty slot
 };
+
+// TEMP RANGES: slider range and the values first boot / the RESTORE
+// DEFAULTS button use. The defaults keep the original hardwired outfit
+// chart (README, Dog outfit images).
+constexpr int TEMP_MIN_F = 0;
+constexpr int TEMP_MAX_F = 110;
+constexpr uint8_t TEMP_DEF_EXTREME_COLD = 30;
+constexpr uint8_t TEMP_DEF_VERY_COLD    = 45;
+constexpr uint8_t TEMP_DEF_COLD         = 55;
+constexpr uint8_t TEMP_DEF_COOL         = 65;
+constexpr uint8_t TEMP_DEF_MILD_COOL    = 70;
+constexpr uint8_t TEMP_DEF_MILD_WARM    = 75;
 
 extern UserSettings userSettings;
 
@@ -109,6 +132,7 @@ void saveTheme();            // theme index (also records the numbering version)
 void saveLocation();         // lat/lon + location mode
 void saveTimezone();         // timezone rules (last auto-resolved cache)
 void saveDisplaySettings();  // temp unit, clock format, date format
+void saveTempRanges();       // the six TEMP RANGES band limits
 void saveNwsStation();       // selected NWS station (id/name/distance/provider)
 
 // Settings-page resets (confirmation pages): clear the saved NVS values of

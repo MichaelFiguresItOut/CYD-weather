@@ -27,6 +27,12 @@ UserSettings userSettings = {
   false,                    // Fahrenheit
   false,                    // US 12-hour clock
   0,                        // "Thursday 12 November 2026"
+  TEMP_DEF_EXTREME_COLD,    // TEMP RANGES defaults (first boot); see config.h
+  TEMP_DEF_VERY_COLD,
+  TEMP_DEF_COLD,
+  TEMP_DEF_COOL,
+  TEMP_DEF_MILD_COOL,
+  TEMP_DEF_MILD_WARM,
   "",                       // nwsStationId: selected NWS station ("" = none)
   "",                       // nwsStationName: its NWS display name
   0.0f,                     // nwsStationDistKm: distance at selection time
@@ -178,6 +184,31 @@ static void loadDisplayPart() {
   Serial.printf("[CFG] display: temp=%s clock=%s datefmt=%d\n",
                 userSettings.useCelsius ? "C" : "F",
                 userSettings.use24Hour ? "24h" : "12h", userSettings.dateFormat);
+
+  // TEMP RANGES (Settings -> TEMP RANGES): the six dog-outfit band limits
+  // (see the UserSettings fields). Never-saved keys take the defaults;
+  // out-of-range values are clamped, then the ordering is repaired
+  // (ascending, at least 1° apart) so a corrupted NVS can never produce
+  // overlapping bands.
+  int t[6] = {
+    prefs.getUChar("tmp0", TEMP_DEF_EXTREME_COLD),
+    prefs.getUChar("tmp1", TEMP_DEF_VERY_COLD),
+    prefs.getUChar("tmp2", TEMP_DEF_COLD),
+    prefs.getUChar("tmp3", TEMP_DEF_COOL),
+    prefs.getUChar("tmp4", TEMP_DEF_MILD_COOL),
+    prefs.getUChar("tmp5", TEMP_DEF_MILD_WARM) };
+  for (int i = 0; i < 6; i++)
+    if (t[i] > TEMP_MAX_F) t[i] = TEMP_MAX_F;
+  for (int i = 1; i < 6; i++)
+    if (t[i] < t[i - 1] + 1) t[i] = (t[i - 1] + 1 > TEMP_MAX_F) ? TEMP_MAX_F : t[i - 1] + 1;
+  userSettings.tempExtremeColdMaxF = (uint8_t)t[0];
+  userSettings.tempVeryColdMaxF    = (uint8_t)t[1];
+  userSettings.tempColdMaxF        = (uint8_t)t[2];
+  userSettings.tempCoolMaxF        = (uint8_t)t[3];
+  userSettings.tempMildCoolMaxF    = (uint8_t)t[4];
+  userSettings.tempMildWarmMaxF    = (uint8_t)t[5];
+  Serial.printf("[CFG] temp ranges: %d/%d/%d/%d/%d/%d\n",
+                t[0], t[1], t[2], t[3], t[4], t[5]);
 }
 
 static void loadStationPart() {
@@ -303,6 +334,20 @@ void saveDisplaySettings() {
   if (ok) ok = prefs.putUChar("clock24", userSettings.use24Hour ? 1 : 0);
   if (ok) ok = prefs.putUChar("datefmt", userSettings.dateFormat ? 1 : 0);
   if (!ok) Serial.println("[CFG] display settings save failed");
+}
+
+// TEMP RANGES: the six dog-outfit band limits (Settings -> TEMP RANGES
+// sliders + RESTORE DEFAULTS). Written on slider release / restore, never
+// continuously while dragging.
+void saveTempRanges() {
+  if (!nvsOpen) return;
+  size_t ok = prefs.putUChar("tmp0", userSettings.tempExtremeColdMaxF);
+  if (ok) ok = prefs.putUChar("tmp1", userSettings.tempVeryColdMaxF);
+  if (ok) ok = prefs.putUChar("tmp2", userSettings.tempColdMaxF);
+  if (ok) ok = prefs.putUChar("tmp3", userSettings.tempCoolMaxF);
+  if (ok) ok = prefs.putUChar("tmp4", userSettings.tempMildCoolMaxF);
+  if (ok) ok = prefs.putUChar("tmp5", userSettings.tempMildWarmMaxF);
+  if (!ok) Serial.println("[CFG] temp ranges save failed");
 }
 
 // Selected NWS station + its automatic backups (Phase 3/4). Called when

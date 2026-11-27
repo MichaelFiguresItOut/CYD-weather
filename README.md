@@ -39,18 +39,20 @@ Golden retriever in the bottom-right corner, wearing an outfit that matches the
 current weather. One of 17 palette PNGs on the SD card root is selected by
 `selectDogImage()` in `src/weather.cpp` and reloaded whenever the selection changes.
 
-**Selection chart** (feels-like temperature in °F; rain overrides everything):
+**Selection chart** (feels-like temperature in °F; rain overrides everything). The
+six temperature-band limits are user-configurable in the settings app's
+**TEMP RANGES** page (see Settings app); the table shows their defaults:
 | Condition | File |
 |---|---|
 | Raining now (`wx.rainingNow`) | `rain_now.png` |
 | Rain expected later / RAIN NEARBY, not raining now | `rain_later.png` |
-| Feels < 30 F | `extreme_cold[_sun].png` |
-| 31–45 F | `very_cold[_sun].png` |
-| 46–55 F | `cold[_sun].png` |
-| 56–65 F | `cool[_sun].png` |
-| 66–70 F | `mild_cool[_sun].png` |
-| 71–75 F | `mild_warm[_sun].png` |
-| ≥ 76 F | `hot[_sun].png` |
+| Feels ≤ 30 F (EXTREME COLD limit, default 30) | `extreme_cold[_sun].png` |
+| 31–45 F (VERY COLD limit, default 45) | `very_cold[_sun].png` |
+| 46–55 F (COLD limit, default 55) | `cold[_sun].png` |
+| 56–65 F (COOL limit, default 65) | `cool[_sun].png` |
+| 66–70 F (MILD COOL limit, default 70) | `mild_cool[_sun].png` |
+| 71–75 F (MILD WARM limit, default 75) | `mild_warm[_sun].png` |
+| Above the MILD WARM limit (default 76 F and up) | `hot[_sun].png` |
 | No usable weather data / load failure | `error.png` |
 
 - **`_sun` variants** are used when it is known daytime AND clear or mainly
@@ -398,6 +400,7 @@ instance (`userSettings`), initialized with the defaults in `config.cpp`:
 | `useCelsius` | temperature display unit (F/C) | F | yes (`celsius` u8) |
 | `use24Hour` | clock format (12h/24h) | US 12-hour | yes (`clock24` u8) |
 | `dateFormat` | date line format (0/1) | "Thursday 12 November 2026" | yes (`datefmt` u8) |
+| `tempExtremeColdMaxF` … `tempMildWarmMaxF` | the six dog-outfit temperature-band limits (max °F per band, ascending, ≥1° apart; everything above MILD WARM's limit is HOT — see Dog outfit images + the Settings TEMP RANGES page) | 30/45/55/65/70/75 | yes (`tmp0`–`tmp5` u8) |
 
 - App timing constants (`WEATHER_REFRESH_MS` 15 min, `WX_MIN_RETRY_MS` 30 s,
   `WIFI_RETRY_MS` 10 s, `NTP_BOOT_WAIT_MS` 10 s) and the NTP policy (UTC
@@ -415,10 +418,12 @@ instance (`userSettings`), initialized with the defaults in `config.cpp`:
 - **Persistence** (NVS namespace `cydwx`): `loadSettings()` in `setup()`
   restores every setting before the first render; a missing key means "never
   saved" → the default above applies. Loaded values are validated (lat/lon
-  ranges, timezone rules ranges, mode 0–2, theme clamped to 0–3) and invalid
+  ranges, timezone rules ranges, mode 0–2, theme clamped to 0–3, TEMP RANGES
+  limits clamped to 0–110 and re-ordered ascending with ≥1° apart) and invalid
   or out-of-range data falls back to the default. Saves are explicit —
   `saveTheme()` (picker selection), `saveDisplaySettings()` (clock/date/temp
-  touch toggles), `saveLocation()`/`saveTimezone()` (after a successful
+  touch toggles), `saveTempRanges()` (slider release / RESTORE DEFAULTS),
+  `saveLocation()`/`saveTimezone()` (after a successful
   automatic detection) — each writes only its own keys, so one setting is
   never clobbered by another, and nothing is written continuously. If the NVS
   namespace fails to open, all settings stay at their defaults and the saves
@@ -449,7 +454,7 @@ instance (`userSettings`), initialized with the defaults in `config.cpp`:
 ## Settings app (touchscreen)
 Full-screen modal UI (`src/settings.{h,cpp}`), entered from the **SETTINGS** button (top-right corner) of the THEME picker; `< BACK` walks one level back at a time, the main page's `< BACK` returns to the picker and repaints the dashboard. While active, `touch.cpp` routes every touch to the settings app (`settingsTouch()`) and `main.cpp` suppresses dashboard redraws. Every change is written to NVS (`cydwx`) immediately — there is no Apply step (spec requirement).
 
-Main page: four section tiles.
+Main page: five section tiles.
 
 | Section | Rows | Behavior |
 |---|---|---|
@@ -457,6 +462,7 @@ Main page: four section tiles.
 | LOCATION | CURRENT LOCATION (display only — "City, Region, CC" plus the postal code when known; a `* NAME` marker on the label line shows the saved profile matching the current location, Phase 7), LATITUDE / LONGITUDE / TIME ZONE (plain-text info rows), ADD LOCATION, SAVE LOCATIONS (Phase 7 — "n SAVED"), red CLEAR / RESET button | ADD LOCATION opens the QWERTY keyboard ("POSTAL CODE OR CITY") — accepts a postal code (US ZIP, ZIP+4, international) or a city name ("NEW YORK, NY", "WELLINGTON, NZ"; letters and the comma come from the keyboard's 123 page); the entered text is uppercased, trimmed, saved immediately, then geocoded via the Open-Meteo Geocoding API with a single Nominatim/OSM fallback request per action for codes or city+state phrases Open-Meteo doesn't index (identifying User-Agent, 1 req/s limit respected); the ADD LOCATION page stays up for the whole lookup (shows `LOOKING UP ON OPEN-METEO...`, then `FALLING BACK TO NOMINATIM...` when Open-Meteo has no match), then lists up to 20 matches on the same screen — one "City, Region, CC" row per place (no coordinates — not useful for choosing), 5 per page with `<` / `>` header arrows and a `PAGE n/N` footer when the results fill more than one page — and tapping one applies it: coordinates saved, `locationMode` → MANUAL, resolved name stored (CURRENT LOCATION row), the saved-profile association is dropped (Phase 7 — the new location is not a saved one), then the NWS station list is updated automatically on the same page before returning to LOCATION (Phase 6 — status lines and outcome messages in the STATIONS section below), and the weather is refetched with the new station chain; 0 matches or a network failure keeps the entered text and shows `NO MATCH FOR <entry>` / `LOOKUP FAILED - RETRY` on the same page (the header's `< BACK` returns to LOCATION) without touching the coordinates. SAVE LOCATIONS (Phase 7) opens the saved-profiles page — see the **Location profiles** bullet below. There is no coordinate entry — LATITUDE / LONGITUDE / TIME ZONE are display only: the location is changed via ADD LOCATION (postal code or city name), and the timezone is automatic (no manual selection, no DST toggle) — it follows the location and is resolved on every weather fetch (IANA id from Open-Meteo → catalog zone, `IANA_MAP` in `src/timezones.h`); the TIME ZONE row shows the resolved zone name and the footer shows the IANA id (`IANA: <id>`; `IANA: - (SET ON FIRST WEATHER UPDATE)` before the first successful fetch, `(UNSUPPORTED)` appended when the id has no catalog mapping — the last valid rules keep running). The red CLEAR / RESET button at the bottom clears the saved location (confirmation page, back keeps it); the association with any saved profile is dropped, the profiles themselves are kept |
 | WI-FI | CURRENT NETWORK (status), SCAN NETWORKS (scan/join), ADD NETWORK (manual entry), WIFI ON/OFF (power), RESTORE SAVED NETWORK (build-time network) | see below |
 | STATIONS | data source (info), preferred station (info), automatic backups (info), SCAN FOR LOCAL WEATHER STATION | NWS observation-station discovery + automatic fallback list — see below |
+| TEMP RANGES | EXTREME COLD, VERY COLD, COLD (page 1 — `<`/`>` in the header), COOL, MILD COOL, MILD WARM (page 2), RESTORE DEFAULTS | the six dog-outfit temperature-band limits (max °F per band, `selectDogImage()`'s chart — see Dog outfit images): one slider per band, values 0–110 F, kept ascending with at least 1° apart (drag is clamped against the neighbouring bands), saved to NVS on slider release; tapping a band's name opens the full-screen outfit preview (that band's non-`_sun` image; any tap closes it and reloads the dashboard outfit); RESTORE DEFAULTS puts the six limits back to 30/45/55/65/70/75 F and saves; leaving the app back to the THEME picker reloads the dog so its preview matches the new ranges |
 
 - **Wi-Fi flow** (see also `src/wifi_conn.{h,cpp}` and the scan requirements in
   `docs/CYD-HARDWARE.md`): the WI-FI page shows the connected SSID as plain
@@ -715,8 +721,10 @@ log from t=0 (a plain port open does NOT reliably reset this board, verified
   (the theme actually in use after migration/clamping). The NVS settings load
   logs `[CFG] location: mode=.. lat=.. lon=..`, `[CFG] timezone: NAME
   (std ..s dst ..s)` (the last auto-resolved rules; no mode — the timezone is
-  automatic only) and `[CFG] display: temp=.. clock=.. datefmt=..` (values
-  after NVS load; location mode 0=unconfigured 1=automatic 2=manual).
+  automatic only), `[CFG] display: temp=.. clock=.. datefmt=..` and
+  `[CFG] temp ranges: 30/45/55/65/70/75` (the six band limits, EXTREME COLD
+  → MILD WARM — values after NVS load; location mode
+  0=unconfigured 1=automatic 2=manual).
 - Each refresh starts with `[WX] rssi=.. freeHeap=..`; each fetch logs
   `[WX] ... day=0|1|? rain=... next=...`.
 - NBM and METAR log their own `[NBM]` / `[METAR]` lines (freeHeap at request
