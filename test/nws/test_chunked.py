@@ -11,7 +11,7 @@ import json
 import socket
 import ssl
 
-URL = "https://api.weather.gov/gridpoints/OKX/34,44/stations"
+URL = "https://api.weather.gov/gridpoints/LOT/77,69/stations"
 CAP = 24576   # NWS_LIST_BODY_CAP
 
 
@@ -20,7 +20,7 @@ def raw_get():
     ctx = ssl.create_default_context()
     with socket.create_connection(("api.weather.gov", 443), timeout=20) as s:
         with ctx.wrap_socket(s, server_hostname="api.weather.gov") as ss:
-            req = (b"GET /gridpoints/OKX/34,44/stations HTTP/1.1\r\n"
+            req = (b"GET /gridpoints/LOT/77,69/stations HTTP/1.1\r\n"
                    b"Host: api.weather.gov\r\n"
                    b"User-Agent: CYD-Weather/1.0 (personal ESP32 weather dashboard)\r\n"
                    b"Accept: application/geo+json\r\n"

@@ -4,6 +4,8 @@ backup-list building (nwsBuildFallbackList), observation usability
 the C++ 1:1 and runs against the real NWS station-list response captured
 in test/nws/ (40 stations, NWS order = nearest first) plus synthetic
 edge cases (CoCoRaHS, >100 km, duplicates, stale/failed observations).
+The capture is the Chicago (60613) station list: 37 stations, NWS order
+= nearest first.
 """
 import json
 
@@ -65,7 +67,7 @@ def from_json(path):
 
 def run():
     stn = from_json('test/nws/stations.json')
-    assert len(stn) == 40, f'expected 40 captured stations, got {len(stn)}'
+    assert len(stn) == 37, f'expected 37 captured stations, got {len(stn)}'
     providers = {}
     for s in stn:
         providers[s['provider']] = providers.get(s['provider'], 0) + 1
@@ -128,9 +130,9 @@ def run():
     print('pick alone in the list: 0 backups (selection still valid)')
 
     # --- 7. maxBackups clamping.
-    assert len(build_fallback(stn, 'KNYC', 5)) == NWS_BACKUP_MAX
-    assert [b['id'] for b in build_fallback(stn, 'KNYC', 1)] == ['KLGA']
-    assert build_fallback(stn, 'KNYC', 0) == []
+    assert len(build_fallback(stn, 'KMDW', 5)) == NWS_BACKUP_MAX
+    assert [b['id'] for b in build_fallback(stn, 'KMDW', 1)] == ['KGYY']
+    assert build_fallback(stn, 'KMDW', 0) == []
     print(f'maxBackups clamped to {NWS_BACKUP_MAX}; 0 and 1 honored')
 
     # --- 8. Observation usability + resolution (freshness < 90 min).
@@ -164,10 +166,10 @@ def run():
         print(f'usability: {label:<34} -> index {got}  ({note})')
 
     # Fallback-ordered list = [preferred, backups...], the exact shape
-    # Phase 5 will resolve: build it from the captured list for KNYC.
-    preferred = [s for s in stn if s['id'] == 'KNYC'][0]
-    ordered = [preferred] + build_fallback(stn, 'KNYC', NWS_BACKUP_MAX)
-    print(f'KNYC fallback order: {[s["id"] for s in ordered]} '
+    # Phase 5 will resolve: build it from the captured list for KMDW.
+    preferred = [s for s in stn if s['id'] == 'KMDW'][0]
+    ordered = [preferred] + build_fallback(stn, 'KMDW', NWS_BACKUP_MAX)
+    print(f'KMDW fallback order: {[s["id"] for s in ordered]} '
           f'(preferred first, then nearest backups)')
     print('ALL OK')
 

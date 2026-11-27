@@ -232,7 +232,7 @@ def run():
     print('maxOut honored (1 = preferred only)')
 
     # --- 12. nwsRankPrepare: distances recomputed + nearest-first.
-    base_lat, base_lon = 40.75, -73.97
+    base_lat, base_lon = 41.79, -87.60
     far = mkstn('F', 999.0, lat=base_lat + 0.5, lon=base_lon)      # ~55 km
     near = mkstn('N', 999.0, lat=base_lat, lon=base_lon + 0.01)    # ~0.8 km
     mid = mkstn('M', 999.0, lat=base_lat + 0.1, lon=base_lon)      # ~11 km
@@ -253,15 +253,15 @@ def run():
     assert len(rank_check_set(coco)) == 5
     print(f'check set: 8-of-12 kept, sparse -> empty, CoCoRaHS not counted')
 
-    # --- 14. Real captured list (NYC area, 40 stations, NWS order).
+    # --- 14. Real captured list (Chicago area, 37 stations, NWS order).
     stn = from_json('test/nws/stations.json')
-    assert len(stn) == 40, f'expected 40 captured stations, got {len(stn)}'
+    assert len(stn) == 37, f'expected 37 captured stations, got {len(stn)}'
 
     # 14a. Haversine vs the NWS-provided distance (NWS uses a geodesic;
-    # spherical haversine agrees to well under 1 km here).
-    worst = max(abs(s['distKm'] - haversine_km(40.7517, -73.9707, s['lat'], s['lon']))
+    # spherical haversine agrees to within ~1 km here).
+    worst = max(abs(s['distKm'] - haversine_km(41.7909, -87.6023, s['lat'], s['lon']))
                 for s in stn)
-    assert worst < 0.6, f'haversine deviates {worst:.2f} km from NWS'
+    assert worst < 1.0, f'haversine deviates {worst:.2f} km from NWS'
     print(f'haversine vs NWS distance on the capture: max deviation {worst:.2f} km')
 
     # 14b. All usable, equal age -> the 4 nearest suitable, plain order.

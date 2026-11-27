@@ -359,7 +359,7 @@ int nwsFetchStations(const char* stationsUrl, NwsStation* out, int maxStations) 
 //  Observation property parsing (unit-aware)
 //
 //  NWS reports observation values with a wmoUnit code and the unit is not
-//  guaranteed to be the "expected" one (the KNYC capture in test/nws/ is
+//  guaranteed to be the "expected" one (the KMDW capture in test/nws/ is
 //  degC + km/h, many US stations report degF + mph), so every value is
 //  converted from its own unitCode rather than assumed.
 // ---------------------------------------------------------------------------

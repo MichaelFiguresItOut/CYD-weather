@@ -42,40 +42,40 @@
             }
         }
     ],
-    "id": "https://api.weather.gov/points/40.7517,-73.9707",
+    "id": "https://api.weather.gov/points/41.7909,-87.6023",
     "type": "Feature",
     "geometry": {
         "type": "Point",
         "coordinates": [
-            -73.9707,
-            40.7517
+            -87.6023,
+            41.7909
         ]
     },
     "properties": {
-        "@id": "https://api.weather.gov/points/40.7517,-73.9707",
+        "@id": "https://api.weather.gov/points/41.7909,-87.6023",
         "@type": "wx:Point",
-        "cwa": "OKX",
+        "cwa": "LOT",
         "type": "land",
-        "forecastOffice": "https://api.weather.gov/offices/OKX",
-        "gridId": "OKX",
-        "gridX": 34,
-        "gridY": 44,
-        "forecast": "https://api.weather.gov/gridpoints/OKX/34,44/forecast",
-        "forecastHourly": "https://api.weather.gov/gridpoints/OKX/34,44/forecast/hourly",
-        "forecastGridData": "https://api.weather.gov/gridpoints/OKX/34,44",
-        "observationStations": "https://api.weather.gov/gridpoints/OKX/34,44/stations",
+        "forecastOffice": "https://api.weather.gov/offices/LOT",
+        "gridId": "LOT",
+        "gridX": 77,
+        "gridY": 69,
+        "forecast": "https://api.weather.gov/gridpoints/LOT/77,69/forecast",
+        "forecastHourly": "https://api.weather.gov/gridpoints/LOT/77,69/forecast/hourly",
+        "forecastGridData": "https://api.weather.gov/gridpoints/LOT/77,69",
+        "observationStations": "https://api.weather.gov/gridpoints/LOT/77,69/stations",
         "relativeLocation": {
             "type": "Feature",
             "geometry": {
                 "type": "Point",
                 "coordinates": [
-                    -73.9386769,
-                    40.6627117
+                    -87.6849386,
+                    41.8370453
                 ]
             },
             "properties": {
-                "city": "New York",
-                "state": "NY",
+                "city": "Chicago",
+                "state": "IL",
                 "distance": {
                     "unitCode": "wmoUnit:m",
                     "value": 0
@@ -86,27 +86,27 @@
                 }
             }
         },
-        "forecastZone": "https://api.weather.gov/zones/forecast/NYZ072",
-        "county": "https://api.weather.gov/zones/county/NYC061",
-        "fireWeatherZone": "https://api.weather.gov/zones/fire/NYZ212",
-        "timeZone": "America/New_York",
-        "radarStation": "KOKX",
+        "forecastZone": "https://api.weather.gov/zones/forecast/ILZ104",
+        "county": "https://api.weather.gov/zones/county/ILC031",
+        "fireWeatherZone": "https://api.weather.gov/zones/fire/ILZ014",
+        "timeZone": "America/Chicago",
+        "radarStation": "KLOT",
         "astronomicalData": {
-            "sunrise": "2026-11-20T06:48:48-05:00",
-            "sunset": "2026-11-20T16:34:16-05:00",
-            "transit": "2026-11-20T11:41:32-05:00",
-            "civilTwilightBegin": "2026-11-20T06:19:11-05:00",
-            "civilTwilightEnd": "2026-11-20T17:03:53-05:00",
-            "nauticalTwilightBegin": "2026-11-20T05:45:46-05:00",
-            "nauticalTwilightEnd": "2026-11-20T17:37:18-05:00",
-            "astronomicalTwilightBegin": "2026-11-20T05:13:12-05:00",
-            "astronomicalTwilightEnd": "2026-11-20T18:09:53-05:00"
+            "sunrise": "2026-11-27T06:54:05-06:00",
+            "sunset": "2026-11-27T16:22:05-06:00",
+            "transit": "2026-11-27T11:38:05-06:00",
+            "civilTwilightBegin": "2026-11-27T06:23:27-06:00",
+            "civilTwilightEnd": "2026-11-27T16:52:44-06:00",
+            "nauticalTwilightBegin": "2026-11-27T05:49:04-06:00",
+            "nauticalTwilightEnd": "2026-11-27T17:27:07-06:00",
+            "astronomicalTwilightBegin": "2026-11-27T05:15:41-06:00",
+            "astronomicalTwilightEnd": "2026-11-27T18:00:30-06:00"
         },
         "nwr": {
-            "transmitter": "KWO35",
-            "sameCode": "036061",
-            "areaBroadcast": "https://api.weather.gov/radio/KWO35/broadcast",
-            "pointBroadcast": "https://api.weather.gov/points/40.7517,-73.9707/radio"
+            "transmitter": "KWO39",
+            "sameCode": "017031",
+            "areaBroadcast": "https://api.weather.gov/radio/KWO39/broadcast",
+            "pointBroadcast": "https://api.weather.gov/points/41.7909,-87.6023/radio"
         }
     }
 }
